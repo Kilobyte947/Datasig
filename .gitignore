@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.venv/
+
+toy_lipschitz/results/*
+!toy_lipschitz/results/.gitkeep
