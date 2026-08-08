@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python --version)",
+      "Bash(.venv/bin/pip show *)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/jupyter kernelspec *)",
+      "Bash(.venv/bin/jupyter nbconvert *)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/472a9879-12df-4e95-9f93-bb55bef61ee0/scratchpad/build_notebooks.py\")"
+    ]
+  }
+}
