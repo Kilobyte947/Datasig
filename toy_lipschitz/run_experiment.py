@@ -80,6 +80,89 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
 
 
 # ---------------------------------------------------------------------------
+# Tier A gap demo (single ridge, closed-form L*, gap vs. uniform sampling)
+# ---------------------------------------------------------------------------
+
+def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fraction=0.02,
+                         local_radius=0.2, local_n_samples=200, hidden_sizes=(64, 64),
+                         epochs=3000, lr=1e-2, grid_size=1000, verbose=True):
+    """Tier A analogue of run_main_experiment: same gap-vs-uniform sampling
+    comparison, but on the single-ridge f* (closed-form L* = A*||w||) instead
+    of the Tier B sum of ridges.
+
+    Uses TinyMLP, not SingleTanhUnit: SingleTanhUnit matches f*'s functional
+    form exactly and would recover L* from almost any data, gap or not, so
+    it can't demonstrate undershoot. TinyMLP has to learn the shape from
+    data, so a sampling gap at the true argmax x* can actually starve it of
+    signal there.
+    """
+    w_t = torch.tensor(w)
+    L_star = tier_a_true_L(w_t, A, norm="l2")
+    x_star = torch.tensor([-b / w_t[0].item()])  # analytic: where w^Tx+b=0
+    f_star = lambda x: tier_a_f(x, w_t, b, A)
+    if verbose:
+        print(f"\n=== Tier A gap demo: L*={L_star:.4f}, x*={x_star.tolist()} ===")
+
+    x_gap = sample_with_gap(N, DOMAIN, 1, gap_center=x_star, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=SEED)
+    x_uniform = sample_uniform(N, DOMAIN, 1, seed=SEED)
+    datasets = {}
+    for key, x in [("gap", x_gap), ("uniform", x_uniform)]:
+        x_train, y_train = make_dataset(f_star, x, noiseless=True)
+        datasets[key] = {"x_train": x_train, "y_train": y_train}
+
+    x_grid = torch.linspace(DOMAIN[0], DOMAIN[1], grid_size).unsqueeze(-1)
+    f_star_vals = f_star(x_grid).detach()
+
+    dataset_results = {}
+    report = {}
+    for key, ds in datasets.items():
+        x_train, y_train = ds["x_train"], ds["y_train"]
+        model, history = train_tiny_mlp(x_train, y_train, hidden_sizes, epochs=epochs, lr=lr)
+
+        L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
+
+        y_pred_train = model(x_train).detach()
+        L_hat_model_pairwise_train, _, _ = pairwise_lipschitz(x_train, y_pred_train, norm="l2")
+        y_pred_grid = model(x_grid).detach()
+        L_hat_model_pairwise_grid, _, _ = pairwise_lipschitz(x_grid, y_pred_grid, norm="l2")
+
+        local_lipschitz_vals = local_perturbation_lipschitz_grid(
+            model, x_grid, radius=local_radius, n_samples=local_n_samples, norm="l2", seed=SEED)
+        grad_norm_vals = gradient_norm_estimate_grid(model, x_grid, norm="l2")
+
+        dataset_results[key] = {
+            "x_train": x_train.squeeze(-1),
+            "f_hat_vals": y_pred_grid,
+            "local_lipschitz_vals": local_lipschitz_vals,
+            "grad_norm_vals": grad_norm_vals,
+        }
+
+        in_gap = (x_grid.squeeze(-1) - x_star.item()).abs() < gap_radius
+        max_in_gap = local_lipschitz_vals[in_gap].max().item() if in_gap.any() else float("nan")
+        max_outside_gap = local_lipschitz_vals[~in_gap].max().item()
+
+        report[key] = {
+            "L_hat_data": L_hat_data,
+            "L_hat_model_pairwise_train": L_hat_model_pairwise_train,
+            "L_hat_model_pairwise_grid": L_hat_model_pairwise_grid,
+            "final_train_mse": history[-1],
+            "max_local_lipschitz_in_gap": max_in_gap,
+            "max_local_lipschitz_outside_gap": max_outside_gap,
+        }
+
+        if verbose:
+            print(f"\n--- {key} dataset ---")
+            for k, v in report[key].items():
+                print(f"  {k}: {v}")
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    fig = plots.plot_gap_vs_uniform(x_grid.squeeze(-1).numpy(), f_star_vals.numpy(), dataset_results, L_star,
+                                     save_path=RESULTS_DIR / "tier_a_gap_vs_uniform.png")
+
+    return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results, "figure": fig}
+
+
+# ---------------------------------------------------------------------------
 # Tier B setup
 # ---------------------------------------------------------------------------
 

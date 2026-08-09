@@ -1,4 +1,4 @@
-# toy_lipschitz
+inc# toy_lipschitz
 
 Experiment 1 of the Lipschitz-diagnostics project: a toy 1D/2D regression
 testbed where the true Lipschitz constant `L*` of the ground-truth function
