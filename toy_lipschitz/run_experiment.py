@@ -9,7 +9,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from toy_lipschitz.toy_functions import tier_a_f, tier_a_true_L, tier_b_f, tier_b_grad, tier_b_true_L
+from toy_lipschitz.toy_functions import(
+    tier_a_f, tier_a_true_L, tier_b_f, tier_b_grad, tier_b_true_L,
+    piecewise_ramp_f, piecewise_ramp_true_L, piecewise_sum_f, piecewise_sum_true_L,
+)
 from toy_lipschitz.data import sample_uniform, sample_with_gap, make_dataset
 from toy_lipschitz.models import SingleTanhUnit, TinyMLP, train_regressor
 from toy_lipschitz.estimators import (
@@ -185,7 +188,6 @@ def build_tier_b_2d():
     L_star, x_star = tier_b_true_L(components, DOMAIN, norm="l2", grid_points=200000, n_restarts=50, seed=SEED)
     return components, L_star, x_star
 
-
 # ---------------------------------------------------------------------------
 # Step 6: main experiment (gap vs. uniform, d=1)
 # ---------------------------------------------------------------------------
@@ -267,6 +269,68 @@ def run_main_experiment(N=400, gap_radius=0.5, gap_fraction=0.02, local_radius=0
 
     return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results, "figure": fig}
 
+
+# ---------------------------------------------------------------------------
+# Cross-architecture check: does model activation matching f*'s functional
+# form (tanh vs. relu, smooth vs. piecewise-linear) help recover L*?
+# ---------------------------------------------------------------------------
+
+def build_tier_a_pl():
+    c, half_width, slope = 0.5, 0.3, 9.0
+    L_star = piecewise_ramp_true_L(slope)
+    f_star = lambda x: piecewise_ramp_f(x, c, half_width, slope)
+    return f_star, L_star
+
+
+def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1e-2,
+                                  grid_size=2000, verbose=True):
+    """2x2 comparison: {tanh_ridge, piecewise_ramp} ground truth crossed
+    with {tanh, relu} model activation. Extends the Tier A sanity-check
+    idea (model form matches f* form) into an explicit matched-vs-
+    mismatched test.
+    """
+    torch.manual_seed(SEED)
+    x_grid = torch.linspace(DOMAIN[0], DOMAIN[1], grid_size).unsqueeze(-1)
+
+    w, b, A = torch.tensor([4.0]), 0.5, 1.5
+    L_star_smooth = tier_a_true_L(w, A, norm="l2")
+    f_star_smooth = lambda x: tier_a_f(x, w, b, A)
+    f_star_pl, L_star_pl = build_tier_a_pl()
+
+    ground_truths = {
+        "tanh_ridge": (f_star_smooth, L_star_smooth),
+        "piecewise_ramp": (f_star_pl, L_star_pl),
+    }
+
+    x = sample_uniform(N, DOMAIN, 1, seed=SEED)
+    report = {}
+
+    for gt_name, (f_star, L_star) in ground_truths.items():
+        x_train, y_train = make_dataset(f_star, x, noiseless=True)
+        L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
+
+        for activation in ["tanh", "relu"]:
+            model = TinyMLP(input_dim=1, hidden_sizes=hidden_sizes, activation=activation)
+            model, history = train_regressor(model, x_train, y_train, epochs=epochs, lr=lr, seed=SEED)
+
+            y_pred_grid = model(x_grid).detach()
+            L_hat_model, _, _ = pairwise_lipschitz(x_grid, y_pred_grid, norm="l2")
+
+            matched = (gt_name == "tanh_ridge" and activation == "tanh") or \
+                      (gt_name == "piecewise_ramp" and activation == "relu")
+            key = (gt_name, activation)
+            report[key] = {
+                "L_star": L_star, "L_hat_data": L_hat_data, "L_hat_model": L_hat_model,
+                "rel_err_model": abs(L_hat_model - L_star) / L_star,
+                "final_train_mse": history[-1], "matched": matched,
+            }
+            if verbose:
+                tag = "MATCHED" if matched else "mismatched"
+                print(f"[{gt_name:14s} | {activation:4s} | {tag:10s}] "
+                      f"L*={L_star:.3f}  L_hat_data={L_hat_data:.3f}  "
+                      f"L_hat_model={L_hat_model:.3f}  rel_err={report[key]['rel_err_model']:.4f}")
+
+    return report
 
 # ---------------------------------------------------------------------------
 # Step 7: sweeps
@@ -414,7 +478,7 @@ def main():
     run_main_experiment()
     run_sweeps()
     run_2d_extension()
-
+    run_cross_architecture_check()
 
 if __name__ == "__main__":
     main()
