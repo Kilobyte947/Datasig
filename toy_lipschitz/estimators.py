@@ -27,12 +27,27 @@ def _norm(v, norm, dim=-1):
     raise ValueError(f"unknown norm: {norm}")
 
 
-def pairwise_lipschitz(x, y, norm="l2", max_pairs=None, seed=None):
-    """L_hat = max_{i != j} |y_i - y_j| / ||x_i - x_j||.
+def _mahalanobis_dist(diff, precision):
+    """diff: (..., k) embedded-space differences. precision: (k, k)
+    matrix (typically an inverse covariance). Returns
+    sqrt(diff^T precision diff), clamped at 0 for numerical safety."""
+    quad = torch.einsum("...i,ij,...j->...", diff, precision, diff)
+    return quad.clamp_min(0.0).sqrt()
+
+
+def pairwise_lipschitz(x, y, norm="l2", max_pairs=None, seed=None, embed_fn=None, precision=None):
+    """L_hat = max_{i != j} |y_i - y_j| / d(x_i, x_j).
 
     x: (N, d) tensor/array, y: (N,) tensor/array (scalar outputs only).
     If max_pairs is set and the number of unordered pairs exceeds it,
     subsample pairs rather than computing all N*(N-1)/2.
+
+    If `embed_fn` and `precision` are both given, distance is Mahalanobis
+    distance in the embedded space: phi = embed_fn(x), then
+    d(x_i,x_j) = sqrt((phi_i-phi_j)^T precision (phi_i-phi_j)). `norm` is
+    ignored in that case. Otherwise behaves exactly as before (raw x,
+    plain l2/l1).
+
     Return (L_hat, i_argmax, j_argmax).
     """
     x = _as_tensor(x)
@@ -53,8 +68,13 @@ def pairwise_lipschitz(x, y, norm="l2", max_pairs=None, seed=None):
         keep = ii != jj
         ii, jj = ii[keep], jj[keep]
 
-    diff = x[ii] - x[jj]
-    dist = _norm(diff, norm)
+    if embed_fn is not None and precision is not None:
+        phi = embed_fn(x)
+        dist = _mahalanobis_dist(phi[ii] - phi[jj], precision)
+    else:
+        diff = x[ii] - x[jj]
+        dist = _norm(diff, norm)
+
     dy = (y[ii] - y[jj]).abs()
 
     valid = dist > 1e-12
@@ -153,3 +173,19 @@ def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=N
         L_hat, _ = local_perturbation_lipschitz(f, X[i], radius, n_samples, norm=norm, seed=point_seed)
         results[i] = L_hat
     return results
+
+
+def local_sample_density(x_query, x_train, radius, norm="l2"):
+    """For each query point, count how many training points fall within
+    `radius` (in the given norm). Point 5: a low local Lipschitz estimate
+    only means "no stretch found in this region," not "no stretch
+    exists" -- it may just mean the region was barely sampled. This
+    returns the missing other half of the picture: how thoroughly each
+    region was actually tested. Not a Lipschitz quantity itself -- plot
+    alongside the Lipschitz heatmap, never merge into it.
+    """
+    x_query = _as_tensor(x_query)
+    x_train = _as_tensor(x_train)
+    diff = x_query.unsqueeze(1) - x_train.unsqueeze(0)  # (Q, N, d)
+    dist = _norm(diff, norm, dim=-1)
+    return (dist <= radius).sum(dim=-1)

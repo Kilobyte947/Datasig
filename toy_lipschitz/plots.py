@@ -102,3 +102,22 @@ def plot_2d_heatmaps(xx, yy, true_grad_norm_grid, model_grad_norm_grid, local_li
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_coverage_heatmap(xx, yy, density_grid, train_points, save_path=None):
+    """Coverage diagnostic (point 5): local training-point density per
+    grid cell, plotted separately from the Lipschitz/gradient-norm
+    heatmaps in plot_2d_heatmaps so "tested and found smooth" and "never
+    really tested" stay visually distinguishable rather than conflated.
+    """
+    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    im = ax.pcolormesh(xx, yy, density_grid, shading="auto", cmap="magma")
+    ax.scatter(train_points[:, 0], train_points[:, 1], s=8, c="white",
+               edgecolors="black", linewidths=0.4, alpha=0.8)
+    ax.set_title("Local sample density (coverage diagnostic)")
+    ax.set_xlabel("x1")
+    ax.set_ylabel("x2")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

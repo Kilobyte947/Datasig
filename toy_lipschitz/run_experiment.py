@@ -21,7 +21,9 @@ from toy_lipschitz.estimators import (
     gradient_norm_estimate,
     gradient_norm_estimate_grid,
     local_perturbation_lipschitz_grid,
+    local_sample_density,
 )
+from toy_lipschitz.embeddings import polynomial_embedding, empirical_covariance, precision_from_covariance
 from toy_lipschitz import plots
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -163,6 +165,49 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
                                      save_path=RESULTS_DIR / "tier_a_gap_vs_uniform.png")
 
     return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results, "figure": fig}
+
+
+# ---------------------------------------------------------------------------
+# Metric extension: plain Euclidean vs. Mahalanobis-in-polynomial-embedding
+# (Terry's points 1-4, meeting 2)
+# ---------------------------------------------------------------------------
+
+def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
+                                gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
+    """Reuses the Tier A gap-sampled dataset. Compares L_hat_data computed
+    with plain Euclidean distance in x against L_hat_data computed with
+    Mahalanobis distance in the degree-`degree` polynomial embedding of x,
+    using the empirical covariance of the embedded training points.
+    """
+    w_t = torch.tensor(w)
+    L_star = tier_a_true_L(w_t, A, norm="l2")
+    f_star = lambda x: tier_a_f(x, w_t, b, A)
+
+    x_star = torch.tensor([-b / w_t[0].item()])
+    x = sample_with_gap(N, DOMAIN, 1, gap_center=x_star, gap_radius=gap_radius,
+                         gap_fraction=gap_fraction, seed=seed)
+    x_train, y_train = make_dataset(f_star, x, noiseless=True)
+
+    L_hat_plain, i_plain, j_plain = pairwise_lipschitz(x_train, y_train, norm="l2")
+
+    embed_fn = lambda xx: polynomial_embedding(xx, degree=degree)
+    phi_train = embed_fn(x_train)
+    cov = empirical_covariance(phi_train)
+    precision = precision_from_covariance(cov)
+
+    L_hat_maha, i_maha, j_maha = pairwise_lipschitz(
+        x_train, y_train, embed_fn=embed_fn, precision=precision)
+
+    result = {
+        "L_star": L_star,
+        "L_hat_plain": L_hat_plain, "argmax_pair_plain": (x_train[i_plain].item(), x_train[j_plain].item()),
+        "L_hat_mahalanobis": L_hat_maha, "argmax_pair_mahalanobis": (x_train[i_maha].item(), x_train[j_maha].item()),
+    }
+    if verbose:
+        print("=== Metric embedding check (plain vs. Mahalanobis) ===")
+        for k, v in result.items():
+            print(f"  {k}: {v}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +524,7 @@ def main():
     run_sweeps()
     run_2d_extension()
     run_cross_architecture_check()
+    run_metric_embedding_check()   # <-- new
 
 if __name__ == "__main__":
     main()
