@@ -326,6 +326,9 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
     components, L_star, x_star = build_tier_b_1d()
     held_out_grid = torch.linspace(DOMAIN[0], DOMAIN[1], held_out_grid_size).unsqueeze(-1)
 
+    if verbose:
+        print(f"=== Step 7 sweeps: ground truth L* = {L_star:.4f} (x* = {x_star.tolist()}) ===")
+
     RESULTS_DIR.mkdir(exist_ok=True)
     all_results = {}
 
