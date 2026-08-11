@@ -5,7 +5,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from toy_lipschitz.toy_functions import tier_a_f, tier_a_true_L
+from toy_lipschitz.toy_functions import tier_a_f, tier_a_grad, tier_a_true_L
 from toy_lipschitz.estimators import (
     pairwise_lipschitz,
     local_perturbation_lipschitz,
@@ -13,6 +13,7 @@ from toy_lipschitz.estimators import (
     gradient_norm_estimate_grid,
     local_perturbation_lipschitz_grid,
 )
+from toy_lipschitz.embeddings import polynomial_embedding, augmented_embedding, empirical_covariance, precision_from_covariance
 
 
 W = torch.tensor([3.0, -4.0])
@@ -93,3 +94,57 @@ def test_local_perturbation_lipschitz_grid_matches_length():
     vals = local_perturbation_lipschitz_grid(f, X, radius=0.3, n_samples=50, norm="l2", seed=5)
     assert vals.shape == (3,)
     assert (vals >= 0).all()
+
+
+def test_mahalanobis_reduces_to_scaled_euclidean_for_identity_embedding():
+    """With a 1D embedding phi(x) = x (degree=1 polynomial, no f(x)
+    appended), the Mahalanobis distance derived from x's own empirical
+    variance is exactly the Euclidean distance rescaled by 1/std(x) -- a
+    closed-form identity that pins down the embed_fn/precision path in
+    pairwise_lipschitz independently of the richer f(x)-embedding used
+    elsewhere."""
+    torch.manual_seed(6)
+    w1 = torch.tensor([3.0])
+    x = torch.rand(200, 1) * 10 - 5  # uniform on [-5, 5]
+    y = tier_a_f(x, w1, 0.0, A)
+
+    embed_fn = lambda xx: polynomial_embedding(xx, degree=1)
+    precision = precision_from_covariance(empirical_covariance(embed_fn(x)))
+    std_x = x.std(unbiased=True).item()
+
+    L_hat_plain, _, _ = pairwise_lipschitz(x, y, norm="l2")
+    L_hat_maha, _, _ = pairwise_lipschitz(x, y, embed_fn=embed_fn, precision=precision)
+
+    assert abs(L_hat_maha - L_hat_plain * std_x) / (L_hat_plain * std_x) < 1e-4
+
+
+def test_local_perturbation_mahalanobis_converges_to_analytic_pullback():
+    """Cross-check for the embed_fn/precision path in
+    local_perturbation_lipschitz: as radius -> 0, the finite-difference
+    Mahalanobis local estimate must converge to the analytic pointwise
+    pullback-metric value L(x0) = |f'(x0)| / sqrt(J(x0)^T precision J(x0)),
+    J = d/dx (x, f(x)) at x0 -- the metric-aware analogue of how
+    gradient_norm_estimate cross-checks pairwise_lipschitz in the plain case.
+    """
+    w1, b1, A1 = torch.tensor([4.0]), 0.5, 1.5
+    f_star = lambda x: tier_a_f(x, w1, b1, A1)
+    fprime = lambda x: tier_a_grad(x, w1, b1, A1).squeeze(-1)
+
+    torch.manual_seed(7)
+    x_train = torch.rand(300, 1) * 10 - 5
+    embed_fn = lambda xx: augmented_embedding(xx, degree=1, f_vals=f_star(xx))
+    precision = precision_from_covariance(empirical_covariance(embed_fn(x_train)))
+
+    for x0_val, tol in [(-0.2, 0.01), (1.0, 0.05)]:
+        x0 = torch.tensor([x0_val])
+        x0_grad = x0.clone().requires_grad_(True)
+        phi = embed_fn(x0_grad.unsqueeze(0)).reshape(-1)
+        J = torch.stack([torch.autograd.grad(phi[k], x0_grad, retain_graph=True)[0][0] for k in range(phi.shape[0])])
+        Q = (J @ precision @ J).item()
+        L_analytic = abs(fprime(x0).item()) / (Q ** 0.5)
+
+        L_finite, _ = local_perturbation_lipschitz(f_star, x0, radius=1e-3, n_samples=2000,
+                                                     seed=8, embed_fn=embed_fn, precision=precision)
+
+        rel_err = abs(L_finite - L_analytic) / L_analytic
+        assert rel_err < tol, f"x0={x0_val}: rel_err={rel_err:.4f} >= {tol}"

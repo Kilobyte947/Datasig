@@ -8,7 +8,10 @@
       "Bash(.venv/bin/jupyter nbconvert *)",
       "Bash(.venv/bin/python -c ' *)",
       "Bash(python3 -c ' *)",
-      "Bash(python3 \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/472a9879-12df-4e95-9f93-bb55bef61ee0/scratchpad/build_notebooks.py\")"
+      "Bash(python3 \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/472a9879-12df-4e95-9f93-bb55bef61ee0/scratchpad/build_notebooks.py\")",
+      "Bash(/opt/anaconda3/bin/python -m pytest toy_lipschitz/tests/ -v)",
+      "Bash(/opt/anaconda3/bin/python -c ' *)",
+      "Bash(/opt/anaconda3/bin/python *)"
     ]
   }
 }

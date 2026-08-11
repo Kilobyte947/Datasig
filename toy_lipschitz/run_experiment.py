@@ -48,7 +48,7 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
     f_star = lambda x: tier_a_f(x, w, b, A)
 
     x = sample_uniform(500, DOMAIN, d, seed=SEED)
-    x_train, y_train = make_dataset(f_star, x, noiseless=True)
+    x_train, y_train = make_dataset(f_star, x)
 
     L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
@@ -90,7 +90,7 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
 
 def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fraction=0.02,
                          local_radius=0.2, local_n_samples=200, hidden_sizes=(64, 64),
-                         epochs=3000, lr=1e-2, grid_size=1000, verbose=True):
+                         epochs=3000, lr=1e-2, grid_size=1000, poly_degree=3, verbose=True):
     """Tier A analogue of run_main_experiment: same gap-vs-uniform sampling
     comparison, but on the single-ridge f* (closed-form L* = A*||w||) instead
     of the Tier B sum of ridges.
@@ -100,11 +100,33 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
     it can't demonstrate undershoot. TinyMLP has to learn the shape from
     data, so a sampling gap at the true argmax x* can actually starve it of
     signal there.
+
+    Also computes the Mahalanobis-in-embedding counterpart of every
+    plain-Euclidean quantity (global L_hat_data and the local Lipschitz
+    curve). `poly_degree` picks (x, x^2, ..., x^poly_degree) as the
+    embedding; see sweep_polynomial_degree for how that degree is chosen.
+
+    NOTE: this embedding deliberately does NOT include f*(x) (Terry's
+    point 6), despite that being tried first. Appending f*(x) makes the
+    metric self-cancelling: it computes L(x) ~= |f_hat'(x)| / (expected
+    movement of f* at x), and since f_hat'(x) ~= f*'(x) almost everywhere
+    a reasonably-trained model has learned the right shape, the ratio
+    collapses to ~1 everywhere regardless of whether f_hat's *magnitude*
+    is right -- checked directly: with f*(x) appended, the gap-vs-uniform
+    in-gap/outside-gap local-Lipschitz ratio that plain Euclidean shows
+    clearly (~6.2x) drops to ~1.0x under the Mahalanobis metric, i.e. it
+    erases the flattening effect this whole codebase exists to detect,
+    rather than revealing it. The polynomial-only embedding doesn't have
+    this problem (it isn't derived from the same function it's measuring)
+    and reproduces the validated global result (L_hat_mahalanobis ~= 6.0
+    vs L_hat_plain ~= 4.87, on L*=6.0). augmented_embedding (in
+    embeddings.py) is left in place for f_vals -- just not wired in here.
     """
     w_t = torch.tensor(w)
     L_star = tier_a_true_L(w_t, A, norm="l2")
     x_star = torch.tensor([-b / w_t[0].item()])  # analytic: where w^Tx+b=0
     f_star = lambda x: tier_a_f(x, w_t, b, A)
+    embed_fn = lambda xx: polynomial_embedding(xx, degree=poly_degree)
     if verbose:
         print(f"\n=== Tier A gap demo: L*={L_star:.4f}, x*={x_star.tolist()} ===")
 
@@ -112,7 +134,7 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
     x_uniform = sample_uniform(N, DOMAIN, 1, seed=SEED)
     datasets = {}
     for key, x in [("gap", x_gap), ("uniform", x_uniform)]:
-        x_train, y_train = make_dataset(f_star, x, noiseless=True)
+        x_train, y_train = make_dataset(f_star, x)
         datasets[key] = {"x_train": x_train, "y_train": y_train}
 
     x_grid = torch.linspace(DOMAIN[0], DOMAIN[1], grid_size).unsqueeze(-1)
@@ -124,7 +146,10 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
         x_train, y_train = ds["x_train"], ds["y_train"]
         model, history = train_tiny_mlp(x_train, y_train, hidden_sizes, epochs=epochs, lr=lr)
 
+        precision = precision_from_covariance(empirical_covariance(embed_fn(x_train)))
+
         L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
+        L_hat_data_maha, _, _ = pairwise_lipschitz(x_train, y_train, embed_fn=embed_fn, precision=precision)
 
         y_pred_train = model(x_train).detach()
         L_hat_model_pairwise_train, _, _ = pairwise_lipschitz(x_train, y_pred_train, norm="l2")
@@ -133,6 +158,9 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
 
         local_lipschitz_vals = local_perturbation_lipschitz_grid(
             model, x_grid, radius=local_radius, n_samples=local_n_samples, norm="l2", seed=SEED)
+        local_lipschitz_vals_maha = local_perturbation_lipschitz_grid(
+            model, x_grid, radius=local_radius, n_samples=local_n_samples, seed=SEED,
+            embed_fn=embed_fn, precision=precision)
         grad_norm_vals = gradient_norm_estimate_grid(model, x_grid, norm="l2")
 
         dataset_results[key] = {
@@ -140,6 +168,10 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
             "f_hat_vals": y_pred_grid,
             "local_lipschitz_vals": local_lipschitz_vals,
             "grad_norm_vals": grad_norm_vals,
+            "L_hat_data_plain": L_hat_data,
+            "L_hat_data_maha": L_hat_data_maha,
+            "local_plain_vals": local_lipschitz_vals,
+            "local_maha_vals": local_lipschitz_vals_maha,
         }
 
         in_gap = (x_grid.squeeze(-1) - x_star.item()).abs() < gap_radius
@@ -148,6 +180,7 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
 
         report[key] = {
             "L_hat_data": L_hat_data,
+            "L_hat_data_maha": L_hat_data_maha,
             "L_hat_model_pairwise_train": L_hat_model_pairwise_train,
             "L_hat_model_pairwise_grid": L_hat_model_pairwise_grid,
             "final_train_mse": history[-1],
@@ -163,8 +196,12 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
     RESULTS_DIR.mkdir(exist_ok=True)
     fig = plots.plot_gap_vs_uniform(x_grid.squeeze(-1).numpy(), f_star_vals.numpy(), dataset_results, L_star,
                                      save_path=RESULTS_DIR / "tier_a_gap_vs_uniform.png")
+    fig_local_vs_global = plots.plot_local_vs_global_lipschitz(
+        x_grid.squeeze(-1).numpy(), dataset_results, L_star,
+        save_path=RESULTS_DIR / "tier_a_local_vs_global_lipschitz.png")
 
-    return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results, "figure": fig}
+    return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results,
+            "figure": fig, "figure_local_vs_global": fig_local_vs_global}
 
 
 # ---------------------------------------------------------------------------
@@ -172,28 +209,40 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
 # (Terry's points 1-4, meeting 2)
 # ---------------------------------------------------------------------------
 
+def build_gap_dataset_and_embedding(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
+                                     gap_radius=0.5, gap_fraction=0.02, seed=SEED):
+    """Shared setup for run_metric_embedding_check and sweep_polynomial_degree:
+    the Tier A gap-sampled dataset, plus an embed_fn built from
+    (x, x^2, ..., x^degree). Does not include f*(x) -- see the note in
+    run_tier_a_gap_demo's docstring: appending f*(x) makes the metric
+    self-cancelling when used to measure Lipschitz ratios, checked
+    directly and confirmed to erase rather than reveal the flattening
+    effect. augmented_embedding (in embeddings.py) still supports f_vals
+    if a non-self-referential use for it turns up later."""
+    w_t = torch.tensor(w)
+    L_star = tier_a_true_L(w_t, A, norm="l2")
+    f_star = lambda x: tier_a_f(x, w_t, b, A)
+    x_star = torch.tensor([-b / w_t[0].item()])
+    x = sample_with_gap(N, DOMAIN, 1, gap_center=x_star, gap_radius=gap_radius,
+                         gap_fraction=gap_fraction, seed=seed)
+    x_train, y_train = make_dataset(f_star, x)
+    embed_fn = lambda xx: polynomial_embedding(xx, degree=degree)
+    return x_train, y_train, L_star, f_star, embed_fn
+
+
 def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
                                 gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
     """Reuses the Tier A gap-sampled dataset. Compares L_hat_data computed
     with plain Euclidean distance in x against L_hat_data computed with
-    Mahalanobis distance in the degree-`degree` polynomial embedding of x,
+    Mahalanobis distance in the (x, x^2, ..., x^degree) embedding of x,
     using the empirical covariance of the embedded training points.
     """
-    w_t = torch.tensor(w)
-    L_star = tier_a_true_L(w_t, A, norm="l2")
-    f_star = lambda x: tier_a_f(x, w_t, b, A)
-
-    x_star = torch.tensor([-b / w_t[0].item()])
-    x = sample_with_gap(N, DOMAIN, 1, gap_center=x_star, gap_radius=gap_radius,
-                         gap_fraction=gap_fraction, seed=seed)
-    x_train, y_train = make_dataset(f_star, x, noiseless=True)
+    x_train, y_train, L_star, f_star, embed_fn = build_gap_dataset_and_embedding(
+        N=N, w=w, b=b, A=A, degree=degree, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=seed)
 
     L_hat_plain, i_plain, j_plain = pairwise_lipschitz(x_train, y_train, norm="l2")
 
-    embed_fn = lambda xx: polynomial_embedding(xx, degree=degree)
-    phi_train = embed_fn(x_train)
-    cov = empirical_covariance(phi_train)
-    precision = precision_from_covariance(cov)
+    precision = precision_from_covariance(empirical_covariance(embed_fn(x_train)))
 
     L_hat_maha, i_maha, j_maha = pairwise_lipschitz(
         x_train, y_train, embed_fn=embed_fn, precision=precision)
@@ -208,6 +257,43 @@ def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
         for k, v in result.items():
             print(f"  {k}: {v}")
     return result
+
+
+def sweep_polynomial_degree(degrees=(1, 2, 3, 4, 5, 6), N=400, w=(4.0,), b=0.5, A=1.5,
+                             gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
+    """Terry's points 1-4: same gap dataset and metric construction as
+    run_metric_embedding_check, swept over polynomial embedding degree.
+    Tracks two things per degree, not accuracy alone: relative error of
+    L_hat_mahalanobis against L*, and cond(cov) of the fitted embedding
+    covariance -- a degree can look accurate on this one dataset by chance
+    while being numerically fragile (high-degree polynomial features are
+    collinear on a bounded domain), so both need checking before picking
+    a degree to standardize on.
+    """
+    if verbose:
+        print(f"=== Polynomial degree sweep ===")
+
+    errors, cond_numbers, L_star = [], [], None
+    for degree in degrees:
+        x_train, y_train, L_star, f_star, embed_fn = build_gap_dataset_and_embedding(
+            N=N, w=w, b=b, A=A, degree=degree, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=seed)
+
+        cov = empirical_covariance(embed_fn(x_train))
+        precision = precision_from_covariance(cov)
+        L_hat, _, _ = pairwise_lipschitz(x_train, y_train, embed_fn=embed_fn, precision=precision)
+
+        rel_err = abs(L_hat - L_star) / L_star
+        cond = torch.linalg.cond(cov).item()
+        errors.append(rel_err)
+        cond_numbers.append(cond)
+        if verbose:
+            print(f"  degree={degree}  L_hat_mahalanobis={L_hat:.4f}  rel_err={rel_err:.4f}  cond(cov)={cond:.3e}")
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    fig = plots.plot_degree_sweep(list(degrees), errors, cond_numbers,
+                                   save_path=RESULTS_DIR / "degree_sweep.png")
+    return {"degrees": list(degrees), "errors": errors, "cond_numbers": cond_numbers,
+            "L_star": L_star, "figure": fig}
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +329,7 @@ def build_gap_and_uniform_datasets(components, x_star, N, gap_radius=0.5, gap_fr
     x_uniform = sample_uniform(N, DOMAIN, 1, seed=seed)
     datasets = {}
     for key, x in [("gap", x_gap), ("uniform", x_uniform)]:
-        x_train, y_train = make_dataset(f_star, x, noiseless=True)
+        x_train, y_train = make_dataset(f_star, x)
         datasets[key] = {"x_train": x_train, "y_train": y_train}
     return datasets
 
@@ -351,7 +437,7 @@ def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1
     report = {}
 
     for gt_name, (f_star, L_star) in ground_truths.items():
-        x_train, y_train = make_dataset(f_star, x, noiseless=True)
+        x_train, y_train = make_dataset(f_star, x)
         L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
         for activation in ["tanh", "relu"]:
@@ -389,7 +475,7 @@ def _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction
         x = sample_uniform(N, DOMAIN, 1, seed=seed)
     else:
         raise ValueError(dataset_type)
-    return make_dataset(f_star, x, noiseless=True)
+    return make_dataset(f_star, x)
 
 
 def sweep_over_N(dataset_type, components, L_star, x_star, held_out_grid, N_values=(50, 100, 200, 500, 1000, 2000, 5000),
@@ -480,7 +566,7 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
         print(f"\n=== 2D extension: L*={L_star:.4f}, x*={x_star.tolist()} ===")
 
     x = sample_with_gap(N, DOMAIN, 2, gap_center=x_star, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=SEED)
-    x_train, y_train = make_dataset(f_star, x, noiseless=True)
+    x_train, y_train = make_dataset(f_star, x)
     model, history = train_tiny_mlp(x_train, y_train, hidden_sizes, epochs=epochs, lr=lr)
     if verbose:
         print(f"  final train MSE: {history[-1]:.6f}")
@@ -520,11 +606,13 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
 
 def main():
     run_tier_a_sanity()
+    run_tier_a_gap_demo()
     run_main_experiment()
     run_sweeps()
     run_2d_extension()
     run_cross_architecture_check()
-    run_metric_embedding_check()   # <-- new
+    run_metric_embedding_check()
+    sweep_polynomial_degree()
 
 if __name__ == "__main__":
     main()

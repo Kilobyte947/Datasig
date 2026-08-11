@@ -104,6 +104,62 @@ def plot_2d_heatmaps(xx, yy, true_grad_norm_grid, model_grad_norm_grid, local_li
     return fig
 
 
+def plot_local_vs_global_lipschitz(x_grid, dataset_results, L_star, save_path=None):
+    """Progression plot (Terry's points 1-5): global scalar estimates (one
+    number for the whole domain) vs. location-resolved local estimates, each
+    shown under both plain Euclidean and Mahalanobis-in-embedding distance.
+    Side by side for gap and uniform sampling.
+
+    dataset_results: dict with keys "gap"/"uniform", each holding
+        "L_hat_data_plain", "L_hat_data_maha": global scalars,
+        "local_plain_vals", "local_maha_vals": (M,) arrays over x_grid.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, key in zip(axes, ["gap", "uniform"]):
+        r = dataset_results[key]
+        ax.axhline(L_star, color="black", linestyle="--", label="L* (true)")
+        ax.axhline(r["L_hat_data_plain"], color="tab:gray", linestyle=":", label="L_hat_data (plain, global)")
+        ax.axhline(r["L_hat_data_maha"], color="tab:purple", linestyle=":", label="L_hat_data (Mahalanobis, global)")
+        ax.plot(x_grid, r["local_plain_vals"], color="tab:red", alpha=0.8, label="local L(x) (plain)")
+        ax.plot(x_grid, r["local_maha_vals"], color="tab:green", alpha=0.8, label="local L(x) (Mahalanobis)")
+        ax.set_title(f"{key} dataset")
+        ax.set_xlabel("x")
+        ax.set_ylabel("Lipschitz estimate")
+        ax.legend(fontsize=8, loc="upper right")
+
+    fig.suptitle("Global -> local, plain -> Mahalanobis: Lipschitz estimate progression")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_degree_sweep(degrees, errors, cond_numbers, save_path=None):
+    """Terry's points 1-4: relative error of the global L_hat_mahalanobis
+    vs. L*, and numerical conditioning of the fitted embedding covariance,
+    both vs. polynomial embedding degree -- used to pick the lowest degree
+    that is both accurate and well-conditioned, not the most accurate at
+    any cost."""
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(degrees, errors, marker="o", color="tab:blue", label="rel. error vs. L*")
+    ax.set_xlabel("polynomial embedding degree")
+    ax.set_ylabel("relative error", color="tab:blue")
+    ax.tick_params(axis="y", labelcolor="tab:blue")
+
+    ax2 = ax.twinx()
+    ax2.plot(degrees, cond_numbers, marker="s", color="tab:red", label="cond(cov)")
+    ax2.set_yscale("log")
+    ax2.set_ylabel("condition number of covariance (log scale)", color="tab:red")
+    ax2.tick_params(axis="y", labelcolor="tab:red")
+
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=8)
+    ax.set_title("Polynomial embedding degree: accuracy vs. conditioning")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
 def plot_coverage_heatmap(xx, yy, density_grid, train_points, save_path=None):
     """Coverage diagnostic (point 5): local training-point density per
     grid cell, plotted separately from the Lipschitz/gradient-norm

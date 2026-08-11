@@ -71,14 +71,9 @@ def sample_with_gap(N, domain, d, gap_center, gap_radius, gap_fraction, seed=Non
     return x[perm]
 
 
-def make_dataset(f_star, x, noiseless=True, noise_std=0.0, seed=None):
-    """Return (x, y) with y = f_star(x) (+ optional Gaussian noise, default off)."""
-    y = f_star(x)
-    if not noiseless and noise_std > 0.0:
-        generator = _generator(seed)
-        if generator is not None:
-            noise = torch.randn(y.shape, generator=generator) * noise_std
-        else:
-            noise = torch.randn(y.shape) * noise_std
-        y = y + noise
-    return x, y
+def make_dataset(f_star, x):
+    """Return (x, y) with y = f_star(x). f_star is always evaluated exactly,
+    with no external noise added on top -- noise, if ever needed, belongs in
+    the definition of f_star itself (a different, still-fixed function),
+    not as a stochastic perturbation of a fixed function's output."""
+    return x, f_star(x)

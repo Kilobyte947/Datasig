@@ -106,11 +106,16 @@ def _sample_in_ball(center, radius, n_samples, generator, max_attempts=10000):
     return torch.cat(collected, dim=0)[:n_samples]
 
 
-def local_perturbation_lipschitz(f, x0, radius, n_samples, norm="l2", seed=None):
+def local_perturbation_lipschitz(f, x0, radius, n_samples, norm="l2", seed=None, embed_fn=None, precision=None):
     """Sample n_samples points x' within an L2 ball of `radius` around x0,
-    evaluate f at x0 and each x', return max |f(x')-f(x0)| / ||x'-x0|| and
+    evaluate f at x0 and each x', return max |f(x')-f(x0)| / d(x0,x') and
     the maximizing x'. f must accept a batch of points (N, d) and return a
     batch of scalars (N,).
+
+    If `embed_fn` and `precision` are both given, d(x0,x') is Mahalanobis
+    distance in the embedded space (same convention as pairwise_lipschitz):
+    phi = embed_fn(x), d = sqrt((phi(x')-phi(x0))^T precision (phi(x')-phi(x0))).
+    `norm` is ignored in that case. Otherwise behaves exactly as before.
     """
     x0 = _as_tensor(x0).reshape(-1)
     generator = _generator(seed)
@@ -121,7 +126,12 @@ def local_perturbation_lipschitz(f, x0, radius, n_samples, norm="l2", seed=None)
         f_x0 = f(x0.unsqueeze(0)).reshape(-1)[0]
         f_xp = f(x_primes).reshape(-1)
 
-    dist = _norm(deltas, norm)
+    if embed_fn is not None and precision is not None:
+        phi_diff = embed_fn(x_primes) - embed_fn(x0.unsqueeze(0))
+        dist = _mahalanobis_dist(phi_diff, precision)
+    else:
+        dist = _norm(deltas, norm)
+
     ratio = (f_xp - f_x0).abs() / dist.clamp_min(1e-12)
     L_hat, idx = ratio.max(dim=0)
     return L_hat.item(), x_primes[idx]
@@ -162,15 +172,17 @@ def gradient_norm_estimate_grid(f, X, norm="l2"):
     raise ValueError(f"unknown norm: {norm}")
 
 
-def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=None):
+def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=None, embed_fn=None, precision=None):
     """local_perturbation_lipschitz evaluated at every row of X (N, d).
-    Returns the full (N,) array of L_hat values, not just the max.
+    Returns the full (N,) array of L_hat values, not just the max. Passes
+    embed_fn/precision through unchanged (see local_perturbation_lipschitz).
     """
     X = _as_tensor(X)
     results = torch.empty(X.shape[0])
     for i in range(X.shape[0]):
         point_seed = None if seed is None else seed + i
-        L_hat, _ = local_perturbation_lipschitz(f, X[i], radius, n_samples, norm=norm, seed=point_seed)
+        L_hat, _ = local_perturbation_lipschitz(f, X[i], radius, n_samples, norm=norm, seed=point_seed,
+                                                  embed_fn=embed_fn, precision=precision)
         results[i] = L_hat
     return results
 
