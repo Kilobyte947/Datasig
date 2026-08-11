@@ -28,10 +28,10 @@ capacity grows — see [Key results](#key-results) below.
 |---|---|
 | `toy_functions.py` | Ground-truth `f*`. **Tier A**: single ridge `A*tanh(w^Tx+b)` with closed-form `L* = A*\|\|w\|\|`. **Tier B**: sum of 2-3 ridges; `tier_b_true_L` estimates `L*` via a dense grid search refined by `torch.optim.LBFGS` gradient ascent from multiple random restarts, returning `(L_star, x_star)`. |
 | `data.py` | Sampling schemes: `sample_uniform`, `sample_with_gap` (rejection sampling — most points drawn outside an L2 ball around a "gap center," a small fraction drawn inside it), `make_dataset`. |
-| `estimators.py` | The three core estimators — `pairwise_lipschitz`, `local_perturbation_lipschitz`, `gradient_norm_estimate` — plus grid-evaluating variants (`gradient_norm_estimate_grid`, `local_perturbation_lipschitz_grid`) that return the full array of per-point estimates, needed for the sweep and heatmap plots. This module is meant to become the first draft of a shared `lipschitz_diagnostics.py` for Experiments 2-4. |
-| `models.py` | `TinyMLP` (configurable depth/width, tanh or relu), `SingleTanhUnit` (matches the Tier A functional form exactly, used only for the sanity check), `train_regressor` (plain MSE/Adam training loop). |
-| `plots.py` | All plotting logic: `plot_gap_vs_uniform` (f*, f_hat, and local-Lipschitz-vs-x with a training-point rug plot, gap vs. uniform side by side), `plot_sweep` (3-curve L* / L_hat_data / L_hat_model vs. N or width), `plot_2d_heatmaps` (true/model/finite-diff gradient-norm heatmaps with training points overlaid). |
-| `run_experiment.py` | Driver wiring everything together: `run_tier_a_sanity`, `run_main_experiment` (Tier B, gap vs. uniform), `run_sweeps` (N-sweep and capacity-sweep, both dataset types), `run_2d_extension` (Step 8). Saves figures and `.npz`/`.csv`-equivalent results to `results/`. |
+| `estimators.py` | The three core estimators — `pairwise_lipschitz`, `local_perturbation_lipschitz`, `gradient_norm_estimate` — plus grid-evaluating variants (`gradient_norm_estimate_grid`, `local_perturbation_lipschitz_grid`) that return the full array of per-point estimates, needed for the sweep and heatmap plots. Also `local_sample_density` — a coverage diagnostic (counts training points within a radius of each query point), not a Lipschitz quantity itself, used alongside the Step 8 heatmaps. This module is meant to become the first draft of a shared `lipschitz_diagnostics.py` for Experiments 2-4. |
+| `models.py` | `TinyMLP` (configurable depth/width, tanh or relu), `SingleTanhUnit` (matches the Tier A functional form exactly, used only for the sanity check), `train_regressor` (plain MSE/Adam training loop; its `seed` only covers randomness inside this function — see Design decisions below). |
+| `plots.py` | All plotting logic: `plot_gap_vs_uniform` (f*, f_hat, and local-Lipschitz-vs-x with a training-point rug plot, gap vs. uniform side by side), `plot_sweep` (3-curve L* / L_hat_data / L_hat_model vs. N or width), `plot_2d_heatmaps` (true/model/finite-diff gradient-norm heatmaps with training points overlaid), `plot_coverage_heatmap` (the `local_sample_density` diagnostic, plotted separately from the Lipschitz heatmaps so "tested and smooth" stays visually distinct from "never tested"). |
+| `run_experiment.py` | Driver wiring everything together: `run_tier_a_sanity`, `run_main_experiment` (Tier B, gap vs. uniform), `run_sweeps` (N-sweep and capacity-sweep, both dataset types), `run_2d_extension` (Step 8, now also computes and saves the coverage-density diagnostic alongside the three Lipschitz heatmaps — see Key results). Saves figures and `.npz`/`.csv`-equivalent results to `results/`. |
 | `tests/test_tier_a_closed_form.py` | Checks the hand-derived analytic gradient against `torch.autograd.grad` — must pass before anything else is trusted. |
 | `tests/test_estimators.py` | Checks `pairwise_lipschitz` converges toward `tier_a_true_L` as N grows, and `gradient_norm_estimate` matches it almost exactly at the true argmax. |
 | `notebook_toy_lipschitz.ipynb` | Thin driver notebook — imports from this package and displays the figures produced by `run_experiment.py`. Contains no reusable logic of its own. |
@@ -44,6 +44,7 @@ capacity grows — see [Key results](#key-results) below.
 - **No `scipy` dependency** — Tier B's gradient-ascent refinement of `L*` uses `torch.optim.LBFGS` instead of `scipy.optimize.minimize`, since the ground-truth gradient (`tier_b_grad`) is itself a plain differentiable torch expression and doesn't need a second autograd trick.
 - **`tier_a_true_L(norm='l1')` is a documented simplification** — it returns `A * ||w||_1`, not the true L1-distance dual norm `A * ||w||_inf`. All correctness checkpoints use `norm='l2'`, where the dual-norm identity holds exactly, so this doesn't affect any test.
 - **Gap sampling is rejection-based**, not analytic — cheap and exact enough at d=1/d=2.
+- **Seed the model, not just the training loop** — `train_regressor` (`models.py`) calls `torch.manual_seed(seed)` internally, but only *after* its caller already constructed the model, so it only ever covered training-time randomness (there is none — the loop is deterministic full-batch gradient descent). Every `seed=...` call site in `run_experiment.py` (`run_tier_a_sanity`, `train_tiny_mlp`, `run_cross_architecture_check`) now calls `torch.manual_seed(seed)` immediately before constructing the model, so a fixed seed actually controls weight initialization too, not just the sampled dataset.
 
 ## How to run it
 
@@ -78,6 +79,23 @@ agreement within tolerance, halts if not), `run_main_experiment()`,
   (autograd), and finite-difference gradient-norm heatmaps over an
   anisotropic 3-ridge function are visually consistent with each other,
   correctly locating the ridge-intersection hotspot.
+- **2D coverage check** (`results/step8_coverage_heatmap.png`, new):
+  `local_sample_density` counts training points within `local_radius` of
+  each grid point. Checked directly, not assumed: at the *default*
+  `run_2d_extension` settings (`gap_radius=0.7`, `gap_fraction=0.03`),
+  the hotspot is **not** undersampled — its density (3, at `x*`) is above
+  the grid-wide average (~2.15), because `gap_fraction=0.03` is nearly 2x
+  the ~0.0154 density a plain uniform sample would put in a ball that
+  size by area alone. Correcting to `gap_fraction≈0.0077` (half that
+  naive-uniform baseline) produces genuine local undersampling (density
+  0 vs. grid-wide mean ~2.15). Averaged over 5 seeds (varying both the
+  sampled dataset and the model's initialization), the hotspot's
+  local-Lipschitz estimate then undershoots the true gradient norm by
+  ~9% on average (mean ratio 0.91, stdev 0.07) — real, but far weaker
+  than the 20-50%+ undershoot seen in the 1D Steps 6-7. Why the 2D effect
+  is weaker is **not established** — one untested hypothesis is that a
+  2D gap can be approached from more directions than a 1D one, giving a
+  smooth model more surrounding signal to interpolate the peak from.
 
 ## Status
 
