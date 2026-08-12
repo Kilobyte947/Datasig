@@ -46,7 +46,15 @@ class SingleTanhUnit(nn.Module):
 
 
 def train_regressor(model, x_train, y_train, epochs, lr, weight_decay=0.0, batch_size=None, seed=None):
-    """Plain MSE training loop, returns trained model + loss history."""
+    """Plain MSE training loop, returns trained model + loss history.
+
+    `seed`, if given, is applied here -- after `model` was already
+    constructed by the caller. It only seeds whatever randomness happens
+    during this call (there currently is none: the loop below is
+    deterministic full-batch gradient descent). It does NOT seed the
+    model's weight initialization. Callers that want reproducible
+    initialization must call `torch.manual_seed` themselves before
+    constructing the model (see the call sites in run_experiment.py)."""
     if seed is not None:
         torch.manual_seed(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)

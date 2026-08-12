@@ -52,6 +52,7 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
 
     L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
+    torch.manual_seed(SEED)  # see train_tiny_mlp -- must precede construction to control init
     model = SingleTanhUnit(input_dim=d)
     model, history = train_regressor(model, x_train, y_train, epochs=2000, lr=0.05, seed=SEED)
 
@@ -335,6 +336,8 @@ def build_gap_and_uniform_datasets(components, x_star, N, gap_radius=0.5, gap_fr
 
 
 def train_tiny_mlp(x_train, y_train, hidden_sizes=(64, 64), activation="tanh", epochs=3000, lr=1e-2, seed=SEED):
+    torch.manual_seed(seed)  # must precede construction: train_regressor's own seed only fires
+    # after the model already exists, so on its own it never controls initialization (see models.py)
     model = TinyMLP(input_dim=x_train.shape[1], hidden_sizes=hidden_sizes, activation=activation)
     model, history = train_regressor(model, x_train, y_train, epochs=epochs, lr=lr, seed=seed)
     return model, history
@@ -441,6 +444,7 @@ def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1
         L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
         for activation in ["tanh", "relu"]:
+            torch.manual_seed(SEED)  # see train_tiny_mlp -- must precede construction to control init
             model = TinyMLP(input_dim=1, hidden_sizes=hidden_sizes, activation=activation)
             model, history = train_regressor(model, x_train, y_train, epochs=epochs, lr=lr, seed=SEED)
 
@@ -560,6 +564,24 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
 
 def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side=40, local_radius=0.3,
                       local_n_samples=30, hidden_sizes=(64, 64), epochs=3000, lr=1e-2, verbose=True):
+    """Step 8: extends the gap-sampling setup to d=2 and produces the
+    three Lipschitz heatmaps (true/model/finite-diff) plus a
+    coverage-density heatmap (local_sample_density -> plot_coverage_heatmap)
+    showing how many training points actually fall within local_radius of
+    each grid point.
+
+    Caveat, checked directly rather than assumed: at the *default*
+    gap_fraction=0.03 with gap_radius=0.7, the ridge-intersection hotspot
+    is NOT undersampled -- its local density comes out above the
+    grid-wide average, because 0.03 is nearly 2x the ~0.0154 density a
+    plain uniform sample would put in a ball that size by area alone.
+    Passing gap_fraction~=0.0077 (half that naive-uniform baseline) does
+    produce genuine local undersampling there, and only then does the
+    local-Lipschitz estimate show an undershoot at the hotspot (~9% below
+    the true gradient norm, averaged over 5 seeds) -- real, but much
+    weaker than the 20-50%+ undershoot in the 1D Steps 6-7. Why it's
+    weaker is not established.
+    """
     components, L_star, x_star = build_tier_b_2d()
     f_star = lambda x: tier_b_f(x, components)
     if verbose:
@@ -581,6 +603,7 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
     model_grad_norm = gradient_norm_estimate_grid(model, grid_x, norm="l2")
     local_lipschitz = local_perturbation_lipschitz_grid(model, grid_x, radius=local_radius,
                                                           n_samples=local_n_samples, norm="l2", seed=SEED)
+    sample_density = local_sample_density(grid_x, x_train, radius=local_radius)
 
     shape = (heatmap_grid_side, heatmap_grid_side)
     RESULTS_DIR.mkdir(exist_ok=True)
@@ -592,14 +615,21 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
         x_train.numpy(),
         save_path=RESULTS_DIR / "step8_2d_heatmaps.png",
     )
+    fig_coverage = plots.plot_coverage_heatmap(
+        gg1.numpy(), gg2.numpy(),
+        sample_density.reshape(shape).numpy(),
+        x_train.numpy(),
+        save_path=RESULTS_DIR / "step8_coverage_heatmap.png",
+    )
 
     np.savez(RESULTS_DIR / "step8_2d_results.npz", L_star=L_star, x_star=x_star.numpy(),
              true_grad_norm=true_grad_norm.reshape(shape).numpy(),
              model_grad_norm=model_grad_norm.reshape(shape).numpy(),
              local_lipschitz=local_lipschitz.reshape(shape).numpy(),
+             sample_density=sample_density.reshape(shape).numpy(),
              x_train=x_train.numpy())
 
-    return {"L_star": L_star, "x_star": x_star, "figure": fig}
+    return {"L_star": L_star, "x_star": x_star, "figure": fig, "figure_coverage": fig_coverage}
 
 
 # ---------------------------------------------------------------------------

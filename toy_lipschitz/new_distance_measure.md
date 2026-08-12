@@ -101,15 +101,49 @@ this whole experiment exists to detect became invisible.
 use where the function being embedded isn't the same one being measured,
 but no current driver uses it.
 
+## A related diagnostic: local sample density (Step 8, 2D)
+
+Separately from the distance-metric work above, `estimators.py::local_sample_density`
+and `plots.py::plot_coverage_heatmap` were added in the same feedback
+round but left unused until now. They don't change how distance is
+measured — they answer a different question: given whatever distance is
+used, how many training points actually landed near a given location?
+`run_2d_extension` (Step 8) now computes this and saves it as
+`results/step8_coverage_heatmap.png`, alongside the true/model/finite-diff
+gradient-norm heatmaps.
+
+Checked directly, not assumed: at the *default* `run_2d_extension`
+settings (`gap_radius=0.7`, `gap_fraction=0.03`), the ridge-intersection
+hotspot at `x*` is **not** actually undersampled — its local density (3,
+at `x*`) is above the grid-wide average (~2.15), because `gap_fraction=0.03`
+is nearly 2x the ~0.0154 density a plain uniform sample would put in a
+ball that size by area alone. Correcting to `gap_fraction≈0.0077` (half
+that naive-uniform baseline) produces genuine local undersampling
+(density 0 vs. grid-wide mean ~2.15). Averaged over 5 seeds (varying both
+the sampled dataset and the model's initialization — see README.md's
+Design decisions for a seeding-order fix this required), the hotspot's
+local-Lipschitz estimate then undershoots the true gradient norm by ~9%
+on average (mean ratio 0.91, stdev 0.07) — real, but far weaker than the
+20-50%+ undershoot seen in the 1D Steps 6-7. Why the 2D effect is weaker
+is **not established** — one untested hypothesis is that a 2D gap can be
+approached from more directions than a 1D one, giving a smooth model more
+surrounding signal to interpolate the peak from.
+
 ## Where this lives
 
 - `embeddings.py` — `polynomial_embedding`, `augmented_embedding`,
   `empirical_covariance`, `precision_from_covariance`.
 - `estimators.py` — `pairwise_lipschitz` and `local_perturbation_lipschitz`
   (+ `_grid`) accept the optional `embed_fn`/`precision` pair.
+  `local_sample_density` is unrelated to the metric (see above) but lives
+  here too.
+- `plots.py` — `plot_coverage_heatmap` renders `local_sample_density`'s
+  output, kept as its own figure rather than a fourth panel on the
+  Lipschitz heatmaps.
 - `run_experiment.py` — `run_metric_embedding_check` (global comparison),
   `run_tier_a_gap_demo` (global + local comparison together, one plot),
-  `sweep_polynomial_degree` (degree selection).
+  `sweep_polynomial_degree` (degree selection), `run_2d_extension` (Step 8,
+  now also computes and plots the coverage-density diagnostic).
 - `tests/test_estimators.py` — the Mahalanobis distance is checked against
   a closed-form identity (reduces to scaled Euclidean distance under a
   simple 1D embedding), and the finite-radius local estimator is checked
