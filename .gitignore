@@ -7,3 +7,7 @@ __pycache__/
 
 toy_lipschitz/results/*
 !toy_lipschitz/results/.gitkeep
+
+mnist_lipschitz/results/*
+!mnist_lipschitz/results/.gitkeep
+mnist_lipschitz/data/
