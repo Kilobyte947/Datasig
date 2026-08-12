@@ -7,6 +7,7 @@ toy_lipschitz/plots.py's convention.
 """
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 MODEL_ORDER = ("logistic_regression", "mlp", "cnn")
 MODEL_LABELS = {"logistic_regression": "Logistic\nRegression", "mlp": "MLP", "cnn": "CNN"}
@@ -102,6 +103,59 @@ def plot_submethod_agreement(results, metric_name, save_path=None):
             ax.text(bar.get_x() + bar.get_width() / 2, v, f"{v:.3g}", ha="center", va="bottom", fontsize=8)
 
     fig.suptitle(f"Sub-method agreement per model ({metric_name} distance)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_ratio_distribution(all_pairs_ratios, near_neighbour_ratios, save_path=None):
+    """Histogram of the full pairwise ratio distribution against ratios
+    restricted to raw-pixel-space nearest-neighbor pairs, on the same
+    axes (density-normalized, since the two arrays have very different
+    counts). Shows whether "visually similar" pairs are typical of the
+    overall ratio distribution or concentrate at one end of it -- e.g. if
+    near-neighbor pairs skew toward high ratios, that's evidence the
+    steepest pairs tend to be visually close digits, not scattered
+    unrelated ones.
+    """
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bins = 50
+    ax.hist(all_pairs_ratios, bins=bins, density=True, alpha=0.6, color="tab:blue",
+            label=f"all pairs (n={len(all_pairs_ratios)})")
+    ax.hist(near_neighbour_ratios, bins=bins, density=True, alpha=0.6, color="tab:orange",
+            label=f"nearest-neighbor pairs (n={len(near_neighbour_ratios)})")
+    ax.set_xlabel("ratio: |margin_i - margin_j| / distance(x_i, x_j)")
+    ax.set_ylabel("density")
+    ax.set_title("Pairwise ratio distribution: all pairs vs. nearest-neighbor pairs")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_image_pairs(pairs, save_path=None):
+    """Given up to 6 `(image1, image2, true1, pred1, true2, pred2, ratio)`
+    tuples -- each image a (784,) or (1,28,28) pixel array, true/pred int
+    class labels, ratio the pairwise Lipschitz ratio for that pair --
+    plots them two-per-row (image1, image2), each row's images titled
+    with their true/predicted label and the row labeled with the pair's
+    ratio. Used both for the top-ratio nearest-neighbor pairs and for a
+    single model's pairwise-argmax pair (i_pair/j_pair).
+    """
+    n = min(len(pairs), 6)
+    fig, axes = plt.subplots(n, 2, figsize=(5, 2.5 * n))
+    axes = np.atleast_2d(axes)
+
+    for row, (img1, img2, true1, pred1, true2, pred2, ratio) in enumerate(pairs[:n]):
+        for col, (img, true_l, pred_l) in enumerate([(img1, true1, pred1), (img2, true2, pred2)]):
+            ax = axes[row, col]
+            ax.imshow(np.asarray(img).reshape(28, 28), cmap="gray")
+            ax.set_title(f"true={true_l} pred={pred_l}", fontsize=9)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        axes[row, 0].set_ylabel(f"ratio={ratio:.3g}", fontsize=9)
+
+    fig.suptitle("Image pairs by pairwise Lipschitz ratio")
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig

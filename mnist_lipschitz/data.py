@@ -55,6 +55,43 @@ def get_dev_subset(data, n, seed):
     return MNISTData(x_flat=data.x_flat[idx], x_image=data.x_image[idx], y=data.y[idx])
 
 
+def stratified_subset_idx(y, n_points, seed, exclude_idx=None):
+    """Index tensor for a subset of `n_points` drawn from `y` (integer
+    class labels), split as evenly as possible across classes -- unlike
+    get_dev_subset's plain uniform random draw, which can (and at small n
+    often does) under-represent some classes by chance. Used where a query
+    set needs to actually cover every digit 0-9, not just whatever a
+    single random draw happens to include.
+
+    If `exclude_idx` is given, those indices are excluded before sampling
+    -- used to keep this subset disjoint from an existing query set drawn
+    from the same pool (e.g. run_mnist_experiment's `query_idx`).
+
+    `n_points` must divide evenly across the number of classes present in
+    `y` (10, for MNIST); the returned subset has exactly n_points points.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    classes = torch.unique(y)
+    n_per_class = n_points // len(classes)
+    assert n_per_class * len(classes) == n_points, (
+        f"n_points={n_points} does not divide evenly across {len(classes)} classes")
+
+    exclude_mask = torch.zeros(y.shape[0], dtype=torch.bool)
+    if exclude_idx is not None:
+        exclude_mask[exclude_idx] = True
+
+    chosen = []
+    for c in classes.tolist():
+        class_idx = ((y == c) & ~exclude_mask).nonzero(as_tuple=True)[0]
+        assert class_idx.shape[0] >= n_per_class, (
+            f"class {c} has only {class_idx.shape[0]} points available, need {n_per_class}")
+        perm = class_idx[torch.randperm(class_idx.shape[0], generator=generator)]
+        chosen.append(perm[:n_per_class])
+
+    idx = torch.cat(chosen)
+    return idx[torch.randperm(idx.shape[0], generator=generator)]  # shuffle across classes
+
+
 def make_loader(x, y, batch_size=128, shuffle=True, seed=None):
     """Wrap (x, y) tensors in a DataLoader for train_classifier."""
     dataset = TensorDataset(x, y)

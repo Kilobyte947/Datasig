@@ -67,6 +67,59 @@ def pairwise_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean
     return L_hat.item(), ii[idx].item(), jj[idx].item()
 
 
+def ratio_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
+    """The shared core of pairwise_lipschitz/pairwise_lipschitz_all: given
+    index tensors `ii`/`jj` into x_batch/y_batch -- any pairing scheme, not
+    just all-i<j (e.g. a random subsample, or nearest-neighbor pairs from
+    an external index) -- returns the (len(ii),) array of
+    |margin_i - margin_j| / distance_fn(x_i, x_j) ratios for exactly those
+    pairs. Factored out so callers that need a different pairing scheme
+    can reuse the same margin/distance/ratio computation without
+    duplicating it (see pairwise_lipschitz_all below, and
+    run_experiment.py's nearest-neighbor ratio check).
+    """
+    with torch.no_grad():
+        margins = margin_fn(model, x_batch, y_batch)
+        dist = distance_fn(x_batch[ii], x_batch[jj])
+    dy = (margins[ii] - margins[jj]).abs()
+    valid = dist > 1e-12
+    return torch.where(valid, dy / dist.clamp_min(1e-12), torch.zeros_like(dist))
+
+
+def pairwise_lipschitz_all(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,
+                            max_pairs=None, seed=None):
+    """Same computation pairwise_lipschitz does internally (margins,
+    pairwise distances, ratios over all i<j pairs, with the same
+    max_pairs subsampling fallback), but returns the full (num_pairs,)
+    ratio array and its index arrays instead of collapsing to the max --
+    needed to look at the ratio *distribution* (a histogram, or picking
+    out specific high-ratio pairs to inspect as images), not just its
+    extreme value.
+
+    Returns (ratio, ii, jj): ratio is (num_pairs,), ii/jj are the row/col
+    index tensors into x_batch/y_batch such that ratio[k] is the ratio for
+    the pair (x_batch[ii[k]], x_batch[jj[k]]).
+    """
+    N = x_batch.shape[0]
+    total_pairs = N * (N - 1) // 2
+
+    if max_pairs is None or total_pairs <= max_pairs:
+        ii, jj = torch.triu_indices(N, N, offset=1)
+    else:
+        generator = _generator(seed)
+        if generator is not None:
+            ii = torch.randint(0, N, (max_pairs,), generator=generator)
+            jj = torch.randint(0, N, (max_pairs,), generator=generator)
+        else:
+            ii = torch.randint(0, N, (max_pairs,))
+            jj = torch.randint(0, N, (max_pairs,))
+        keep = ii != jj
+        ii, jj = ii[keep], jj[keep]
+
+    ratio = ratio_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj)
+    return ratio, ii, jj
+
+
 def local_perturbation_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,
                                   radius=1.0, n_directions=20, seed=None):
     """Finite-difference local estimate, per point in x_batch: sample
