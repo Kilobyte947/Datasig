@@ -19,7 +19,9 @@
       "Bash(curl -sI --max-time 5 https://ossci-datasets.s3.amazonaws.com/mnist/)",
       "Bash(/opt/anaconda3/bin/pip install *)",
       "Bash(git check-ignore *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }

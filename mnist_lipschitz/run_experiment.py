@@ -192,12 +192,12 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
     (disjoint from `exclude_idx`, e.g. run_mnist_experiment's `query_idx`).
 
     Deliberately generic over `model`/`distance_fn` (matching
-    pairwise_lipschitz's own interface) so the same function can later be
-    called again for the MLP/CNN and/or the Mahalanobis distance_fn --
-    only `model_name`/`metric_name` need to change (they're only used to
-    label the returned arrays), not the logic. run_mnist_experiment calls
-    this once, scoped to logistic regression + Euclidean, pending review;
-    see its Step 2b.
+    pairwise_lipschitz's own interface) so the same function can be called
+    again for a different model or distance_fn without new code -- only
+    `model_name`/`metric_name` need to change (they're only used to label
+    the returned arrays), not the logic. run_mnist_experiment's Step 2b
+    calls this once per model under Euclidean distance; the Mahalanobis
+    distance_fn is a planned follow-up using the same loop.
 
     Nearest neighbors are found via sklearn's NearestNeighbors on RAW
     pixel space specifically -- that's "which points count as
@@ -326,12 +326,12 @@ def run_mnist_experiment(
     """The main driver, in named steps:
     1. Train logistic regression, MLP, and CNN on full MNIST.
     2. Run all three Lipschitz estimators (Euclidean distance) on all three models.
-    2b. Ratio-distribution analysis (Checkpoint 7, in progress) -- scoped to
-        logistic regression + Euclidean only for now, pending review; see
-        run_ratio_distribution_analysis's docstring for why it's written to
-        generalize to the other models/Mahalanobis distance later.
+    2b. Ratio-distribution analysis (Checkpoint 7), Euclidean distance, all
+        three models.
     3. Compute full-training-set pixel covariance, sweep epsilon, select one.
     4. Re-run all three estimators (Mahalanobis distance, selected epsilon) on all three models.
+    4b. Ratio-distribution analysis again, Mahalanobis distance (reusing the
+        epsilon/precision from Step 3/4, not re-selected), all three models.
     5. Save everything to results/.
     """
     torch.manual_seed(seed)
@@ -378,17 +378,18 @@ def run_mnist_experiment(
             print(f"  {name}: pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
                   f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}")
 
-    # --- Step 2b: ratio-distribution analysis (Checkpoint 7, in progress) ---
-    # Scoped to logistic regression + Euclidean distance only for now,
-    # pending review -- run_ratio_distribution_analysis itself takes
-    # model/distance_fn as parameters (see its docstring) so repeating this
-    # call for the MLP/CNN and/or the Mahalanobis distance_fn later is a
-    # different call, not new code.
+    # --- Step 2b: ratio-distribution analysis (Checkpoint 7) ---
+    # Euclidean distance, all three models -- run_ratio_distribution_analysis
+    # takes model/distance_fn as parameters (see its docstring), so this is
+    # the same call repeated per model, matching Step 2's models.items()
+    # loop; the Mahalanobis distance_fn is the same pattern again (Phase 2).
     if verbose:
-        print("\n=== Step 2b: ratio-distribution analysis (logistic_regression / euclidean) ===")
-    ratio_dist_results = run_ratio_distribution_analysis(
-        lr_model, "logistic_regression", "euclidean", test.x_flat, test.y, euclidean_distance_fn,
-        exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+        print("\n=== Step 2b: ratio-distribution analysis (Euclidean, all models) ===")
+    ratio_dist_euclidean_results = {}
+    for name, model in models.items():
+        ratio_dist_euclidean_results[name] = run_ratio_distribution_analysis(
+            model, name, "euclidean", test.x_flat, test.y, euclidean_distance_fn,
+            exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
 
     # The pairwise-argmax pair from Step 2's logistic-regression/Euclidean
     # result, pre-assembled into the same tuple shape plot_image_pairs
@@ -434,6 +435,19 @@ def run_mnist_experiment(
             print(f"  {name}: pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
                   f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}")
 
+    # --- Step 4b: ratio-distribution analysis (Checkpoint 7, Mahalanobis) ---
+    # Same three models, same stratified subset construction (same seed ->
+    # same query_idx/exclude_idx and same stratified_subset_idx draw as
+    # Step 2b), only the distance_fn changes -- reuses the epsilon/precision
+    # already selected in Step 3, does not re-run epsilon selection.
+    if verbose:
+        print(f"\n=== Step 4b: ratio-distribution analysis (Mahalanobis, epsilon={selected_epsilon:g}, all models) ===")
+    ratio_dist_mahalanobis_results = {}
+    for name, model in models.items():
+        ratio_dist_mahalanobis_results[name] = run_ratio_distribution_analysis(
+            model, name, "mahalanobis", test.x_flat, test.y, mahalanobis_distance_fn,
+            exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+
     # --- Step 5: save results ---
     RESULTS_DIR.mkdir(exist_ok=True)
 
@@ -451,7 +465,10 @@ def run_mnist_experiment(
                       for name, r in euclidean_results.items()},
         "mahalanobis": {name: {k: v for k, v in r.items() if not k.endswith("_vals")}
                         for name, r in mahalanobis_results.items()},
-        "ratio_distribution_analysis": {"euclidean_logistic_regression": ratio_dist_results["summary"]},
+        "ratio_distribution_analysis": {
+            **{f"euclidean_{name}": r["summary"] for name, r in ratio_dist_euclidean_results.items()},
+            **{f"mahalanobis_{name}": r["summary"] for name, r in ratio_dist_mahalanobis_results.items()},
+        },
         "config": {
             "n_lipschitz_points": n_lipschitz_points, "local_radius": local_radius,
             "n_directions": n_directions, "n_subsamples": n_subsamples,
@@ -469,7 +486,10 @@ def run_mnist_experiment(
     for name, r in mahalanobis_results.items():
         arrays[f"mahalanobis_{name}_local"] = np.array(r["local_vals"])
         arrays[f"mahalanobis_{name}_grad"] = np.array(r["grad_vals"])
-    arrays.update(ratio_dist_results["arrays"])
+    for r in ratio_dist_euclidean_results.values():
+        arrays.update(r["arrays"])
+    for r in ratio_dist_mahalanobis_results.values():
+        arrays.update(r["arrays"])
     np.savez(RESULTS_DIR / "mnist_experiment_arrays.npz", **arrays)
 
     if verbose:
@@ -479,7 +499,8 @@ def run_mnist_experiment(
         "accuracies": accuracies,
         "euclidean_results": euclidean_results,
         "mahalanobis_results": mahalanobis_results,
-        "ratio_dist_results": ratio_dist_results,
+        "ratio_dist_euclidean_results": ratio_dist_euclidean_results,
+        "ratio_dist_mahalanobis_results": ratio_dist_mahalanobis_results,
         "argmax_pair_lr_euclidean": argmax_pair_lr_euclidean,
         "selected_epsilon": selected_epsilon,
         "cond_numbers": cond_numbers,
