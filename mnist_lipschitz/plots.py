@@ -7,6 +7,7 @@ toy_lipschitz/plots.py's convention.
 """
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 MODEL_ORDER = ("logistic_regression", "mlp", "cnn")
 MODEL_LABELS = {"logistic_regression": "Logistic\nRegression", "mlp": "MLP", "cnn": "CNN"}
@@ -102,6 +103,38 @@ def plot_submethod_agreement(results, metric_name, save_path=None):
             ax.text(bar.get_x() + bar.get_width() / 2, v, f"{v:.3g}", ha="center", va="bottom", fontsize=8)
 
     fig.suptitle(f"Sub-method agreement per model ({metric_name} distance)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_covariance_eigenvalues(eigenvalues, epsilon=None, save_path=None):
+    """Sorted eigenvalue spectrum (descending) of the pixel covariance
+    matrix Sigma used to build the Mahalanobis distance, log-scale y-axis
+    (the spectrum spans many orders of magnitude, down to numerically ~0
+    for MNIST's constant-zero border pixels). If `epsilon` is given, also
+    plots the ridge-regularized spectrum `eigenvalues + epsilon` (same
+    eigenvectors as Sigma, just a uniform shift) so it's directly visible
+    how much epsilon lifts the near-zero tail while barely touching the
+    large eigenvalues.
+    """
+    eigenvalues = eigenvalues.detach().cpu().numpy() if hasattr(eigenvalues, "detach") else np.asarray(eigenvalues)
+    eigenvalues_plot = np.clip(eigenvalues, a_min=1e-12, a_max=None)  # avoid log(0)/log(negative) from fp noise
+    index = np.arange(1, len(eigenvalues) + 1)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(index, eigenvalues_plot, color="tab:blue", label="eigenvalues of Sigma")
+
+    if epsilon is not None:
+        ax.plot(index, eigenvalues_plot + epsilon, color="tab:orange", linestyle="--",
+                label=f"eigenvalues of Sigma + {epsilon:g}*I")
+        ax.axhline(epsilon, color="gray", linestyle=":", label=f"epsilon={epsilon:g}")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("eigenvalue rank (descending)")
+    ax.set_ylabel("eigenvalue magnitude (log scale)")
+    ax.set_title("Eigenvalue spectrum of the pixel covariance matrix")
+    ax.legend(fontsize=8)
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig

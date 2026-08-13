@@ -68,7 +68,7 @@ def pairwise_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean
 
 
 def local_perturbation_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,
-                                  radius=1.0, n_directions=20, seed=None):
+                                  radius=1.0, n_directions=40, seed=None):
     """Finite-difference local estimate, per point in x_batch: sample
     `n_directions` random unit vectors in raw 784-d pixel space, scale to
     length `radius`, perturb x -> x+delta (label held fixed at the

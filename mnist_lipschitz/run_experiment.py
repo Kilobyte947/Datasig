@@ -22,7 +22,9 @@ from mnist_lipschitz.estimators import (
     local_perturbation_lipschitz,
     gradient_norm_estimate,
 )
-from mnist_lipschitz.distance import pixel_covariance, ridge_precision, make_mahalanobis_distance_fn
+from mnist_lipschitz.distance import (
+    pixel_covariance, ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
+)
 
 torch.set_default_dtype(torch.float64)
 
@@ -171,7 +173,7 @@ def _run_estimators_for_model(model, x_query, y_query, distance_fn, precision=No
 
 def run_mnist_experiment(
     epochs_lr=15, epochs_mlp=15, epochs_cnn=8, mlp_hidden_sizes=(128,),
-    n_lipschitz_points=300, local_radius=1.0, n_directions=20,
+    n_lipschitz_points=1000, local_radius=1.0, n_directions=20,
     epsilon_values=(1e-6, 1e-4, 1e-2, 1e-1, 1.0, 10.0, 100.0),
     n_subsamples=10, subsample_frac=0.8, stability_n_points=100,
     max_cond=1e4, max_cv=0.05,
@@ -232,6 +234,7 @@ def run_mnist_experiment(
     if verbose:
         print("\n=== Step 3: epsilon selection ===")
     Sigma = pixel_covariance(train.x_flat)
+    eigenvalues = covariance_eigenvalues(Sigma)
     cond_numbers = sweep_epsilon(Sigma, list(epsilon_values))
     stability_results = epsilon_stability_check(
         lr_model, train, list(epsilon_values), n_subsamples=n_subsamples,
@@ -289,6 +292,7 @@ def run_mnist_experiment(
     for name, r in mahalanobis_results.items():
         arrays[f"mahalanobis_{name}_local"] = np.array(r["local_vals"])
         arrays[f"mahalanobis_{name}_grad"] = np.array(r["grad_vals"])
+    arrays["covariance_eigenvalues"] = eigenvalues.numpy()
     np.savez(RESULTS_DIR / "mnist_experiment_arrays.npz", **arrays)
 
     if verbose:
@@ -302,6 +306,8 @@ def run_mnist_experiment(
         "cond_numbers": cond_numbers,
         "cv_values": cv_values,
         "epsilon_values": list(epsilon_values),
+        "Sigma": Sigma,
+        "covariance_eigenvalues": eigenvalues,
     }
 
 
