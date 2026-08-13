@@ -76,6 +76,57 @@ def plot_sweep(x_values, L_star, L_hat_data_values, L_hat_model_values, xlabel, 
     return fig
 
 
+def plot_seed_averaged_sweep(seed_results, L_star, xlabel="N (training samples)", title=None,
+                              spread="std", show_individual_seeds=True, log_x=True, save_path=None):
+    """Seed-averaged N-sweep plot: mean L_hat_model vs. the swept quantity
+    with a shaded spread band, mean L_hat_data for comparison, the L*
+    reference line (same convention as plot_sweep), and optionally faint
+    individual per-seed L_hat_model trajectories. Additive to plot_sweep,
+    which is unchanged and still used for the single-seed sweeps.
+
+    seed_results: dict as returned by sweep_over_N_seed_averaged
+    (N_values, seeds, L_hat_data/model_mean/std/min/max,
+    L_hat_data/model_per_seed).
+    spread: "std" for a +-1 std band, "minmax" for a min/max band.
+    """
+    x_values = seed_results["N_values"]
+    mean_model = seed_results["L_hat_model_mean"]
+    mean_data = seed_results["L_hat_data_mean"]
+
+    if spread == "std":
+        lo = mean_model - seed_results["L_hat_model_std"]
+        hi = mean_model + seed_results["L_hat_model_std"]
+        band_label = "L_hat_model mean +/- 1 std"
+    elif spread == "minmax":
+        lo = seed_results["L_hat_model_min"]
+        hi = seed_results["L_hat_model_max"]
+        band_label = "L_hat_model mean, min-max range"
+    else:
+        raise ValueError(f"unknown spread: {spread}")
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    ax.axhline(L_star, color="black", linestyle="--", label="L* (true)")
+
+    if show_individual_seeds:
+        for i, seed in enumerate(seed_results["seeds"]):
+            ax.plot(x_values, seed_results["L_hat_model_per_seed"][i], color="tab:orange",
+                     alpha=0.15, linewidth=1, label="individual seeds" if i == 0 else None)
+
+    ax.fill_between(x_values, lo, hi, color="tab:orange", alpha=0.25, label=band_label)
+    ax.plot(x_values, mean_model, marker="s", color="tab:orange", label="L_hat_model (mean)")
+    ax.plot(x_values, mean_data, marker="o", color="tab:blue", label="L_hat_data (mean)")
+
+    if log_x:
+        ax.set_xscale("log")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Lipschitz estimate")
+    ax.set_title(title or f"Seed-averaged sweep ({len(seed_results['seeds'])} seeds)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
 def plot_2d_heatmaps(xx, yy, true_grad_norm_grid, model_grad_norm_grid, local_lipschitz_grid,
                       train_points, save_path=None):
     """Step 8: heatmaps of true ||grad f*||, model ||grad f_hat|| (autograd),
