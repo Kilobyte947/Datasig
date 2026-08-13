@@ -67,6 +67,24 @@ def pairwise_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean
     return L_hat.item(), ii[idx].item(), jj[idx].item()
 
 
+def ratio_and_components_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
+    """Like ratio_for_pairs below, but also returns the two raw components
+    the ratio is built from: `dist` (distance_fn(x_i, x_j), the
+    denominator) and `margin_diff` (|margin_i - margin_j|, the numerator).
+    For callers that want to inspect *why* a specific pair has a high or
+    low ratio -- e.g. two points that are simply far apart in the metric
+    vs. two points whose margins genuinely diverge a lot -- not just the
+    combined number. Returns (ratio, dist, margin_diff), each shape (len(ii),).
+    """
+    with torch.no_grad():
+        margins = margin_fn(model, x_batch, y_batch)
+        dist = distance_fn(x_batch[ii], x_batch[jj])
+    margin_diff = (margins[ii] - margins[jj]).abs()
+    valid = dist > 1e-12
+    ratio = torch.where(valid, margin_diff / dist.clamp_min(1e-12), torch.zeros_like(dist))
+    return ratio, dist, margin_diff
+
+
 def ratio_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
     """The shared core of pairwise_lipschitz/pairwise_lipschitz_all: given
     index tensors `ii`/`jj` into x_batch/y_batch -- any pairing scheme, not
@@ -78,12 +96,8 @@ def ratio_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
     duplicating it (see pairwise_lipschitz_all below, and
     run_experiment.py's nearest-neighbor ratio check).
     """
-    with torch.no_grad():
-        margins = margin_fn(model, x_batch, y_batch)
-        dist = distance_fn(x_batch[ii], x_batch[jj])
-    dy = (margins[ii] - margins[jj]).abs()
-    valid = dist > 1e-12
-    return torch.where(valid, dy / dist.clamp_min(1e-12), torch.zeros_like(dist))
+    ratio, _, _ = ratio_and_components_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj)
+    return ratio
 
 
 def pairwise_lipschitz_all(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,

@@ -220,9 +220,12 @@ def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, ma
 
 
 def plot_image_pairs(pairs, save_path=None):
-    """Given up to 6 `(image1, image2, true1, pred1, true2, pred2, ratio)`
+    """Given up to 6 `(image1, image2, true1, pred1, true2, pred2, ratio, ...)`
     tuples -- each image a (784,) or (1,28,28) pixel array, true/pred int
-    class labels, ratio the pairwise Lipschitz ratio for that pair --
+    class labels, ratio the pairwise Lipschitz ratio for that pair, any
+    further fields ignored (e.g. run_ratio_distribution_analysis's
+    top_near_neighbor_pairs also carries distance/margin-diff trailing
+    fields, used for the printed table in the notebook, not this plot) --
     plots them two-per-row (image1, image2), each row's images titled
     with their true/predicted label and the row labeled with the pair's
     ratio. Used both for the top-ratio nearest-neighbor pairs and for a
@@ -239,7 +242,7 @@ def plot_image_pairs(pairs, save_path=None):
     fig, axes = plt.subplots(n, 2, figsize=(5, 2.5 * n))
     axes = np.atleast_2d(axes)
 
-    for row, (img1, img2, true1, pred1, true2, pred2, ratio) in enumerate(pairs[:n]):
+    for row, (img1, img2, true1, pred1, true2, pred2, ratio, *_rest) in enumerate(pairs[:n]):
         for col, (img, true_l, pred_l) in enumerate([(img1, true1, pred1), (img2, true2, pred2)]):
             ax = axes[row, col]
             ax.imshow(np.asarray(img).reshape(28, 28), cmap="gray")

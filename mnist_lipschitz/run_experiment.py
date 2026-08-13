@@ -22,7 +22,7 @@ from mnist_lipschitz.estimators import (
     euclidean_distance_fn,
     pairwise_lipschitz,
     pairwise_lipschitz_all,
-    ratio_for_pairs,
+    ratio_and_components_for_pairs,
     local_perturbation_lipschitz,
     gradient_norm_estimate,
 )
@@ -258,7 +258,8 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
 
     near_ii = torch.arange(x_subset.shape[0]).repeat_interleave(k_neighbors)
     near_jj = torch.as_tensor(neighbor_idx.reshape(-1), dtype=torch.long)
-    near_ratio = ratio_for_pairs(model, x_subset, y_subset, margin_fn, distance_fn, near_ii, near_jj)
+    near_ratio, near_dist, near_margin_diff = ratio_and_components_for_pairs(
+        model, x_subset, y_subset, margin_fn, distance_fn, near_ii, near_jj)
 
     # Deduplicated by canonical (min(i,j), max(i,j)): mutual nearest
     # neighbors produce both (i,j) and (j,i) in near_ii/near_jj with the
@@ -275,11 +276,17 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
         if canonical in seen_canonical:
             continue
         seen_canonical.add(canonical)
+        # Trailing (dist, margin_diff) fields beyond the 7 plot_image_pairs
+        # needs -- it slices to the first 7 and ignores the rest, so this
+        # stays compatible with every other caller that builds plain
+        # 7-tuples (e.g. run_mnist_experiment's argmax_pair_lr_euclidean).
         top_near_neighbor_pairs.append((
             x_subset[i].numpy(), x_subset[j].numpy(),
             y_subset[i].item(), preds_subset[i].item(),
             y_subset[j].item(), preds_subset[j].item(),
             near_ratio[k].item(),
+            near_dist[k].item(),
+            near_margin_diff[k].item(),
         ))
         if len(top_near_neighbor_pairs) >= top_k_images:
             break
