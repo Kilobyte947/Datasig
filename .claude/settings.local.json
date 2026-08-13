@@ -11,7 +11,17 @@
       "Bash(python3 \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/472a9879-12df-4e95-9f93-bb55bef61ee0/scratchpad/build_notebooks.py\")",
       "Bash(/opt/anaconda3/bin/python -m pytest toy_lipschitz/tests/ -v)",
       "Bash(/opt/anaconda3/bin/python -c ' *)",
-      "Bash(/opt/anaconda3/bin/python *)"
+      "Bash(/opt/anaconda3/bin/python *)",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\"; head -30 {}')",
+      "Bash(/opt/anaconda3/bin/pip show *)",
+      "Bash(KMP_DUPLICATE_LIB_OK=TRUE /opt/anaconda3/bin/python -c ' *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(curl -sI --max-time 5 https://ossci-datasets.s3.amazonaws.com/mnist/)",
+      "Bash(/opt/anaconda3/bin/pip install *)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }
