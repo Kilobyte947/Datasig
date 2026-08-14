@@ -1,14 +1,8 @@
-"""Driver: Tier A sanity check, Tier B main experiment (gap vs. uniform),
-N/capacity sweeps, and the 2D extension. Saves csv/npz results and figures
-to results/. All reusable logic lives in the sibling modules — this file
-only wires them together.
-"""
+"""This file calls the toy functions, data sampling, model training, and estimators, in the right order, and reports numbers."""
 
 from pathlib import Path
-
 import numpy as np
 import torch
-
 from toy_lipschitz.toy_functions import(
     tier_a_f, tier_a_true_L, tier_b_f, tier_b_grad, tier_b_true_L,
     piecewise_ramp_f, piecewise_ramp_true_L, piecewise_sum_f, piecewise_sum_true_L,
@@ -32,12 +26,12 @@ SEED = 0
 
 torch.set_default_dtype(torch.float64)
 
-
 # ---------------------------------------------------------------------------
-# Step 5: Tier A sanity run
+# Tier A sanity run
 # ---------------------------------------------------------------------------
 
 def run_tier_a_sanity(tol=0.10, verbose=True):
+    """Tier A sanity check: single ridge, closed-form L*, and three different estimation methods (pairwise, local perturbation, gradient norm) all return L_hat within `tol` of L*."""
     torch.manual_seed(SEED)
     w = torch.tensor([4.0])
     b = 0.5
@@ -92,36 +86,13 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
 def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fraction=0.02,
                          local_radius=0.2, local_n_samples=200, hidden_sizes=(64, 64),
                          epochs=3000, lr=1e-2, grid_size=1000, poly_degree=3, verbose=True):
-    """Tier A analogue of run_main_experiment: same gap-vs-uniform sampling
-    comparison, but on the single-ridge f* (closed-form L* = A*||w||) instead
-    of the Tier B sum of ridges.
+    """Gap-vs-uniform sampling comparison on the single-ridge f* (closed-form L* = A*||w||). 
+    Uses TinyMLP rather than SingleTanhUnit, since a model that must learn f*'s shape from data 
+    can be starved by a sampling gap, unlike one whose architecture matches f* exactly.
 
-    Uses TinyMLP, not SingleTanhUnit: SingleTanhUnit matches f*'s functional
-    form exactly and would recover L* from almost any data, gap or not, so
-    it can't demonstrate undershoot. TinyMLP has to learn the shape from
-    data, so a sampling gap at the true argmax x* can actually starve it of
-    signal there.
-
-    Also computes the Mahalanobis-in-embedding counterpart of every
-    plain-Euclidean quantity (global L_hat_data and the local Lipschitz
-    curve). `poly_degree` picks (x, x^2, ..., x^poly_degree) as the
-    embedding; see sweep_polynomial_degree for how that degree is chosen.
-
-    NOTE: this embedding deliberately does NOT include f*(x) (Terry's
-    point 6), despite that being tried first. Appending f*(x) makes the
-    metric self-cancelling: it computes L(x) ~= |f_hat'(x)| / (expected
-    movement of f* at x), and since f_hat'(x) ~= f*'(x) almost everywhere
-    a reasonably-trained model has learned the right shape, the ratio
-    collapses to ~1 everywhere regardless of whether f_hat's *magnitude*
-    is right -- checked directly: with f*(x) appended, the gap-vs-uniform
-    in-gap/outside-gap local-Lipschitz ratio that plain Euclidean shows
-    clearly (~6.2x) drops to ~1.0x under the Mahalanobis metric, i.e. it
-    erases the flattening effect this whole codebase exists to detect,
-    rather than revealing it. The polynomial-only embedding doesn't have
-    this problem (it isn't derived from the same function it's measuring)
-    and reproduces the validated global result (L_hat_mahalanobis ~= 6.0
-    vs L_hat_plain ~= 4.87, on L*=6.0). augmented_embedding (in
-    embeddings.py) is left in place for f_vals -- just not wired in here.
+    Also computes the Mahalanobis-in-embedding counterpart of every plain-Euclidean quantity, 
+    using a degree-`poly_degree` polynomial embedding of x (f*(x) itself is deliberately excluded 
+    from the embedding - see new_distance_measure.md for why, and for the degree selection in sweep_polynomial_degree).
     """
     w_t = torch.tensor(w)
     L_star = tier_a_true_L(w_t, A, norm="l2")
@@ -207,19 +178,13 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
 
 # ---------------------------------------------------------------------------
 # Metric extension: plain Euclidean vs. Mahalanobis-in-polynomial-embedding
-# (Terry's points 1-4, meeting 2)
 # ---------------------------------------------------------------------------
 
 def build_gap_dataset_and_embedding(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
                                      gap_radius=0.5, gap_fraction=0.02, seed=SEED):
-    """Shared setup for run_metric_embedding_check and sweep_polynomial_degree:
-    the Tier A gap-sampled dataset, plus an embed_fn built from
-    (x, x^2, ..., x^degree). Does not include f*(x) -- see the note in
-    run_tier_a_gap_demo's docstring: appending f*(x) makes the metric
-    self-cancelling when used to measure Lipschitz ratios, checked
-    directly and confirmed to erase rather than reveal the flattening
-    effect. augmented_embedding (in embeddings.py) still supports f_vals
-    if a non-self-referential use for it turns up later."""
+    """Shared setup for run_metric_embedding_check and sweep_polynomial_degree: 
+    the Tier A gap-sampled dataset, plus an embed_fn from (x, x^2, ..., x^degree). Excludes f*(x) -- see new_distance_measure.md.
+    """
     w_t = torch.tensor(w)
     L_star = tier_a_true_L(w_t, A, norm="l2")
     f_star = lambda x: tier_a_f(x, w_t, b, A)
@@ -233,9 +198,8 @@ def build_gap_dataset_and_embedding(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
 
 def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
                                 gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
-    """Reuses the Tier A gap-sampled dataset. Compares L_hat_data computed
-    with plain Euclidean distance in x against L_hat_data computed with
-    Mahalanobis distance in the (x, x^2, ..., x^degree) embedding of x,
+    """Compares L_hat_data on the Tier A gap-sampled dataset under two distances: 
+    plain Euclidean in x, and Mahalanobis distance in a degree-`degree` polynomial embedding of x, 
     using the empirical covariance of the embedded training points.
     """
     x_train, y_train, L_star, f_star, embed_fn = build_gap_dataset_and_embedding(
@@ -262,14 +226,10 @@ def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
 
 def sweep_polynomial_degree(degrees=(1, 2, 3, 4, 5, 6), N=400, w=(4.0,), b=0.5, A=1.5,
                              gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
-    """Terry's points 1-4: same gap dataset and metric construction as
-    run_metric_embedding_check, swept over polynomial embedding degree.
-    Tracks two things per degree, not accuracy alone: relative error of
-    L_hat_mahalanobis against L*, and cond(cov) of the fitted embedding
-    covariance -- a degree can look accurate on this one dataset by chance
-    while being numerically fragile (high-degree polynomial features are
-    collinear on a bounded domain), so both need checking before picking
-    a degree to standardize on.
+    """Sweeps the polynomial embedding degree used in run_metric_embedding_check, tracking both relative 
+    error of L_hat_mahalanobis against L* and the condition number of the fitted embedding covariance. 
+    A degree can appear accurate on a single dataset while being numerically fragile, since high-degree 
+    polynomial features become collinear on a bounded domain -- both metrics are needed to select a degree.
     """
     if verbose:
         print(f"=== Polynomial degree sweep ===")
@@ -321,7 +281,7 @@ def build_tier_b_2d():
     return components, L_star, x_star
 
 # ---------------------------------------------------------------------------
-# Step 6: main experiment (gap vs. uniform, d=1)
+# Main experiment (gap vs. uniform, d=1)
 # ---------------------------------------------------------------------------
 
 def build_gap_and_uniform_datasets(components, x_star, N, gap_radius=0.5, gap_fraction=0.02, seed=SEED):
@@ -468,7 +428,7 @@ def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1
     return report
 
 # ---------------------------------------------------------------------------
-# Step 7: sweeps
+# Sweeps
 # ---------------------------------------------------------------------------
 
 def _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction, seed):
@@ -559,28 +519,16 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
 
 
 # ---------------------------------------------------------------------------
-# Step 8: 2D extension
+# 2D extension
 # ---------------------------------------------------------------------------
 
 def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side=40, local_radius=0.3,
                       local_n_samples=30, hidden_sizes=(64, 64), epochs=3000, lr=1e-2, verbose=True):
-    """Step 8: extends the gap-sampling setup to d=2 and produces the
-    three Lipschitz heatmaps (true/model/finite-diff) plus a
-    coverage-density heatmap (local_sample_density -> plot_coverage_heatmap)
-    showing how many training points actually fall within local_radius of
-    each grid point.
+    """Extends the gap-sampling setup to d=2, producing three Lipschitz heatmaps (true / model / finite-difference) and a coverage-density
+    heatmap (local_sample_density -> plot_coverage_heatmap) showing how many training points fall within local_radius of each grid point.
 
-    Caveat, checked directly rather than assumed: at the *default*
-    gap_fraction=0.03 with gap_radius=0.7, the ridge-intersection hotspot
-    is NOT undersampled -- its local density comes out above the
-    grid-wide average, because 0.03 is nearly 2x the ~0.0154 density a
-    plain uniform sample would put in a ball that size by area alone.
-    Passing gap_fraction~=0.0077 (half that naive-uniform baseline) does
-    produce genuine local undersampling there, and only then does the
-    local-Lipschitz estimate show an undershoot at the hotspot (~9% below
-    the true gradient norm, averaged over 5 seeds) -- real, but much
-    weaker than the 20-50%+ undershoot in the 1D Steps 6-7. Why it's
-    weaker is not established.
+    Default parameters do not produce genuine local undersampling at the hotspot - see new_distance_measure.md for the corrected gap_fraction
+    and the resulting undershoot measurement.
     """
     components, L_star, x_star = build_tier_b_2d()
     f_star = lambda x: tier_b_f(x, components)

@@ -1,25 +1,22 @@
-"""The three Lipschitz estimators: pairwise (data or model), local
-perturbation (finite-difference), and gradient norm (infinitesimal/autograd).
-
-These are kept as clearly separate functions throughout — local-perturbation
-and gradient-norm are related but distinct quantities and must never be
-conflated into a single "local estimate" without labeling which one it is.
+"""The three Lipschitz estimators: 
+1. pairwise (data or model), 
+2. local perturbation (finite-difference)
+3. gradient norm (infinitesimal/autograd)
+These are kept as clearly separate functions throughout and are related but distinct quantities. 
 """
 
 import torch
 
 torch.set_default_dtype(torch.float64)
 
-
 def _generator(seed):
     return torch.Generator().manual_seed(seed) if seed is not None else None
-
 
 def _as_tensor(v):
     return torch.as_tensor(v, dtype=torch.get_default_dtype())
 
-
 def _norm(v, norm, dim=-1):
+    """Ordinary straight-line distance between two points, sqrt(sum((x_i - x_j)^2)). Used by pairwise_lipschitz and local_sample_density."""
     if norm == "l2":
         return v.norm(p=2, dim=dim)
     elif norm == "l1":
@@ -28,25 +25,33 @@ def _norm(v, norm, dim=-1):
 
 
 def _mahalanobis_dist(diff, precision):
-    """diff: (..., k) embedded-space differences. precision: (k, k)
-    matrix (typically an inverse covariance). Returns
-    sqrt(diff^T precision diff), clamped at 0 for numerical safety."""
+    """Weighted distance in embedded feature space: reweights each direction by `precision` (inverse covariance) instead of treating all
+    directions equally like plain Euclidean distance -- movement in directions the data naturally varies a lot counts for less than
+    movement in directions it barely varies at all. Reduces to plain Euclidean distance if `precision` is the identity matrix.
+
+    diff: (..., k) embedded-space differences (not raw x).
+    precision: (k, k), typically an inverse covariance.
+    Returns sqrt(diff^T @ precision @ diff), clamped at 0 first (guards against floating-point rounding pushing a near-zero value negative).
+    """
     quad = torch.einsum("...i,ij,...j->...", diff, precision, diff)
     return quad.clamp_min(0.0).sqrt()
 
 
 def pairwise_lipschitz(x, y, norm="l2", max_pairs=None, seed=None, embed_fn=None, precision=None):
-    """L_hat = max_{i != j} |y_i - y_j| / d(x_i, x_j).
+    """Takes a pair of points and computes |y_i - y_j| / distance(x_i, x_j), for each pair, then reports the biggest ratio found:
 
-    x: (N, d) tensor/array, y: (N,) tensor/array (scalar outputs only).
-    If max_pairs is set and the number of unordered pairs exceeds it,
-    subsample pairs rather than computing all N*(N-1)/2.
+    L_hat = max_{i != j} |y_i - y_j| / d(x_i, x_j) 
 
-    If `embed_fn` and `precision` are both given, distance is Mahalanobis
-    distance in the embedded space: phi = embed_fn(x), then
-    d(x_i,x_j) = sqrt((phi_i-phi_j)^T precision (phi_i-phi_j)). `norm` is
-    ignored in that case. Otherwise behaves exactly as before (raw x,
-    plain l2/l1).
+    x: (N, d) tensor/array, y: (N,) tensor/array (scalar outputs only). This is GLOBAL
+
+    If max_pairs is set and the number of unordered pairs exceeds it, subsample pairs rather than computing all N*(N-1)/2.
+
+    distance d(x_i, x_j) is computed one of two ways:
+      - Default (embed_fn/precision not given): plain distance in raw x (Euclidean if norm="l2", or l1 if norm="l1").
+      - If embed_fn and precision are both given: raw x is first transformed via phi = embed_fn(x) (e.g. into polynomial features),
+        then d is the Mahalanobis distance between phi_i and phi_j -- sqrt((phi_i - phi_j)^T @ precision @ (phi_i - phi_j)) -- using
+        `precision` to weight some directions more than others, instead of treating every direction equally the way plain distance does.
+        `norm` is ignored in this case.
 
     Return (L_hat, i_argmax, j_argmax).
     """
@@ -107,16 +112,17 @@ def _sample_in_ball(center, radius, n_samples, generator, max_attempts=10000):
 
 
 def local_perturbation_lipschitz(f, x0, radius, n_samples, norm="l2", seed=None, embed_fn=None, precision=None):
-    """Sample n_samples points x' within an L2 ball of `radius` around x0,
-    evaluate f at x0 and each x', return max |f(x')-f(x0)| / d(x0,x') and
-    the maximizing x'. f must accept a batch of points (N, d) and return a
-    batch of scalars (N,).
+    """Sample n_samples points x' within an L2 ball of `radius` around x0, evaluate f at x0 and each x', 
+    return max |f(x')-f(x0)| / d(x0,x') and the maximizing x'. 
+    f must accept a batch of points (N, d) and return a batch of scalars (N,).
 
-    If `embed_fn` and `precision` are both given, d(x0,x') is Mahalanobis
-    distance in the embedded space (same convention as pairwise_lipschitz):
-    phi = embed_fn(x), d = sqrt((phi(x')-phi(x0))^T precision (phi(x')-phi(x0))).
-    `norm` is ignored in that case. Otherwise behaves exactly as before.
+    d(x0,x') is one of two things:
+      - Default: plain distance in raw x (per `norm`).
+      - If embed_fn AND precision are both given: Mahalanobis distance
+        between embed_fn(x0) and embed_fn(x'), weighted by `precision`
+        (same convention as pairwise_lipschitz). `norm` is ignored.
     """
+
     x0 = _as_tensor(x0).reshape(-1)
     generator = _generator(seed)
     deltas = _sample_in_ball(x0, radius, n_samples, generator)
@@ -138,10 +144,9 @@ def local_perturbation_lipschitz(f, x0, radius, n_samples, norm="l2", seed=None,
 
 
 def gradient_norm_estimate(f, x0, norm="l2"):
-    """Autograd-based LOCAL/infinitesimal estimate: requires_grad on x0,
-    forward pass, backward, return ||grad||_2 (or the dual norm, l_inf, for
-    norm='l1'). Do not conflate with local_perturbation_lipschitz above —
-    that is a separate, finite-difference quantity.
+    """A separate, exact-derivative quantity which gives autograd-based local/infinitesimal estimate (true slope at at that location, no perturbation needed).
+    Requires_grad on x0, forward pass,  backward, return ||grad||_2 (or the dual norm, l_inf, for norm='l1').
+    A separate, exact-derivative quantity -- do not conflate with local_perturbation_lipschitz above, which is finite-difference (perturb and measure), not exact.
     """
     x0 = _as_tensor(x0).reshape(-1).clone().requires_grad_(True)
     y = f(x0.unsqueeze(0)).reshape(-1)[0]
@@ -156,11 +161,9 @@ def gradient_norm_estimate(f, x0, norm="l2"):
 def gradient_norm_estimate_grid(f, X, norm="l2"):
     """Vectorized gradient_norm_estimate over every row of X (N, d).
 
-    Valid whenever f applies independently per batch row (true of tier_b_f
-    and of standard feedforward models like TinyMLP): summing the outputs
-    before calling autograd.grad decouples into per-row gradients. Returns
-    a detached (N,) tensor — the full array of local gradient-norm
-    estimates, not just the max (needed for the sweep/heatmap plots).
+    Valid whenever f applies independently per batch row (true of tier_b_f and of standard feedforward models like TinyMLP): 
+    summing the outputs before calling autograd.grad decouples into per-row gradients. 
+    Returns the full (N,) array of per-point estimates, not just the max -- needed for the sweep/heatmap plots.
     """
     X = _as_tensor(X).clone().requires_grad_(True)
     y = f(X).reshape(-1)
@@ -174,8 +177,8 @@ def gradient_norm_estimate_grid(f, X, norm="l2"):
 
 def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=None, embed_fn=None, precision=None):
     """local_perturbation_lipschitz evaluated at every row of X (N, d).
-    Returns the full (N,) array of L_hat values, not just the max. Passes
-    embed_fn/precision through unchanged (see local_perturbation_lipschitz).
+    Returns the full (N,) array of L_hat values, not just the max.
+    embed_fn/precision, if given, are passed through unchanged (seelocal_perturbation_lipschitz).
     """
     X = _as_tensor(X)
     results = torch.empty(X.shape[0])
@@ -188,13 +191,9 @@ def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=N
 
 
 def local_sample_density(x_query, x_train, radius, norm="l2"):
-    """For each query point, count how many training points fall within
-    `radius` (in the given norm). Point 5: a low local Lipschitz estimate
-    only means "no stretch found in this region," not "no stretch
-    exists" -- it may just mean the region was barely sampled. This
-    returns the missing other half of the picture: how thoroughly each
-    region was actually tested. Not a Lipschitz quantity itself -- plot
-    alongside the Lipschitz heatmap, never merge into it.
+    """This is not a Lipschitz quantity. It is a convergence coverage check (a count).
+    For each query point, count training points within `radius` (per `norm`). 
+    A low local Lipschitz estimate can mean "genuinely smooth here" or  just "barely sampled here," and this is what tells the two apart.
     """
     x_query = _as_tensor(x_query)
     x_train = _as_tensor(x_train)
