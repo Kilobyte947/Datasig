@@ -108,6 +108,38 @@ def plot_submethod_agreement(results, metric_name, save_path=None):
     return fig
 
 
+def plot_covariance_eigenvalues(eigenvalues, epsilon=None, save_path=None):
+    """Sorted eigenvalue spectrum (descending) of the pixel covariance
+    matrix Sigma used to build the Mahalanobis distance, log-scale y-axis
+    (the spectrum spans many orders of magnitude, down to numerically ~0
+    for MNIST's constant-zero border pixels). If `epsilon` is given, also
+    plots the ridge-regularized spectrum `eigenvalues + epsilon` (same
+    eigenvectors as Sigma, just a uniform shift) so it's directly visible
+    how much epsilon lifts the near-zero tail while barely touching the
+    large eigenvalues.
+    """
+    eigenvalues = eigenvalues.detach().cpu().numpy() if hasattr(eigenvalues, "detach") else np.asarray(eigenvalues)
+    eigenvalues_plot = np.clip(eigenvalues, a_min=1e-12, a_max=None)  # avoid log(0)/log(negative) from fp noise
+    index = np.arange(1, len(eigenvalues) + 1)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(index, eigenvalues_plot, color="tab:blue", label="eigenvalues of Sigma")
+
+    if epsilon is not None:
+        ax.plot(index, eigenvalues_plot + epsilon, color="tab:orange", linestyle="--",
+                label=f"eigenvalues of Sigma + {epsilon:g}*I")
+        ax.axhline(epsilon, color="gray", linestyle=":", label=f"epsilon={epsilon:g}")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("eigenvalue rank (descending)")
+    ax.set_ylabel("eigenvalue magnitude (log scale)")
+    ax.set_title("Eigenvalue spectrum of the pixel covariance matrix")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
 def plot_ratio_distribution(ratio_dist_results, metric_name="Euclidean", save_path=None):
     """Histogram of the full pairwise ratio distribution against ratios
     restricted to raw-pixel-space nearest-neighbor pairs, one panel per
@@ -188,9 +220,12 @@ def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, ma
 
 
 def plot_image_pairs(pairs, save_path=None):
-    """Given up to 6 `(image1, image2, true1, pred1, true2, pred2, ratio)`
+    """Given up to 6 `(image1, image2, true1, pred1, true2, pred2, ratio, ...)`
     tuples -- each image a (784,) or (1,28,28) pixel array, true/pred int
-    class labels, ratio the pairwise Lipschitz ratio for that pair --
+    class labels, ratio the pairwise Lipschitz ratio for that pair, any
+    further fields ignored (e.g. run_ratio_distribution_analysis's
+    top_near_neighbor_pairs also carries distance/margin-diff trailing
+    fields, used for the printed table in the notebook, not this plot) --
     plots them two-per-row (image1, image2), each row's images titled
     with their true/predicted label and the row labeled with the pair's
     ratio. Used both for the top-ratio nearest-neighbor pairs and for a
@@ -207,7 +242,7 @@ def plot_image_pairs(pairs, save_path=None):
     fig, axes = plt.subplots(n, 2, figsize=(5, 2.5 * n))
     axes = np.atleast_2d(axes)
 
-    for row, (img1, img2, true1, pred1, true2, pred2, ratio) in enumerate(pairs[:n]):
+    for row, (img1, img2, true1, pred1, true2, pred2, ratio, *_rest) in enumerate(pairs[:n]):
         for col, (img, true_l, pred_l) in enumerate([(img1, true1, pred1), (img2, true2, pred2)]):
             ax = axes[row, col]
             ax.imshow(np.asarray(img).reshape(28, 28), cmap="gray")

@@ -443,13 +443,20 @@ def _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction
 
 
 def sweep_over_N(dataset_type, components, L_star, x_star, held_out_grid, N_values=(50, 100, 200, 500, 1000, 2000, 5000),
-                  hidden_sizes=(64, 64), epochs=2000, lr=1e-2, gap_radius=0.5, gap_fraction=0.02, verbose=True):
+                  hidden_sizes=(64, 64), epochs=2000, lr=1e-2, gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
+    """`seed` controls both the sampled dataset (_build_dataset) and the
+    model's init/training (train_tiny_mlp) at every N. Defaults to the
+    module-level SEED, so existing callers that don't pass `seed=`
+    (run_sweeps(), for both the uniform and gap N-sweeps) are unaffected --
+    this parameter exists so sweep_over_N_seed_averaged can repeat the
+    exact same procedure at different seeds without duplicating this
+    function's logic."""
     L_hat_data_vals, L_hat_model_vals = [], []
     for N in N_values:
-        x_train, y_train = _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction, seed=SEED)
+        x_train, y_train = _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction, seed=seed)
         L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
-        model, _ = train_tiny_mlp(x_train, y_train, hidden_sizes, epochs=epochs, lr=lr)
+        model, _ = train_tiny_mlp(x_train, y_train, hidden_sizes, epochs=epochs, lr=lr, seed=seed)
         y_pred_grid = model(held_out_grid).detach()
         L_hat_model, _, _ = pairwise_lipschitz(held_out_grid, y_pred_grid, norm="l2")
 
@@ -516,6 +523,98 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
         np.savez(RESULTS_DIR / f"step7_sweeps_{dataset_type}.npz", L_star=L_star, **all_results[dataset_type])
 
     return {"L_star": L_star, "results": all_results}
+
+
+# ---------------------------------------------------------------------------
+# Seed-averaged gap-dataset N-sweep: is the single-seed non-monotonicity
+# (L_hat_model bouncing between ~4.6 and ~8.4 as N grows 50->5000, gap
+# dataset) a real effect of gap sampling, or single-seed noise? Standalone
+# addition -- not wired into run_sweeps() or main(), so the existing
+# single-seed sweep behavior (uniform and gap N-sweeps, both capacity
+# sweeps) is completely unaffected.
+# ---------------------------------------------------------------------------
+
+def sweep_over_N_seed_averaged(dataset_type, components, L_star, x_star, held_out_grid,
+                                N_values=(50, 100, 200, 500, 1000, 2000, 5000), n_seeds=5, base_seed=SEED,
+                                hidden_sizes=(64, 64), epochs=2000, lr=1e-2, gap_radius=0.5, gap_fraction=0.02,
+                                verbose=True):
+    """Repeats sweep_over_N independently for `n_seeds` seeds
+    (base_seed, base_seed+1, ..., varying both the sampled dataset and the
+    model's init/training via sweep_over_N's `seed` parameter), holding
+    every other hyperparameter fixed, and returns both the raw per-seed
+    results and the aggregated mean/std/min/max across seeds for each N.
+
+    Generic over `dataset_type` (like sweep_over_N itself) even though it
+    exists specifically to check the gap dataset's N-sweep -- reuses
+    sweep_over_N rather than duplicating its logic, so it works identically
+    for "uniform" if ever needed.
+    """
+    seeds = [base_seed + i for i in range(n_seeds)]
+    L_hat_data_per_seed, L_hat_model_per_seed = [], []
+
+    for seed in seeds:
+        if verbose:
+            print(f"  --- seed {seed} ---")
+        L_hat_data_N, L_hat_model_N = sweep_over_N(
+            dataset_type, components, L_star, x_star, held_out_grid, N_values=N_values,
+            hidden_sizes=hidden_sizes, epochs=epochs, lr=lr, gap_radius=gap_radius,
+            gap_fraction=gap_fraction, seed=seed, verbose=verbose)
+        L_hat_data_per_seed.append(L_hat_data_N)
+        L_hat_model_per_seed.append(L_hat_model_N)
+
+    L_hat_data_per_seed = np.stack(L_hat_data_per_seed)    # (n_seeds, len(N_values))
+    L_hat_model_per_seed = np.stack(L_hat_model_per_seed)  # (n_seeds, len(N_values))
+
+    return {
+        "N_values": np.array(N_values),
+        "seeds": seeds,
+        "L_hat_data_per_seed": L_hat_data_per_seed,
+        "L_hat_model_per_seed": L_hat_model_per_seed,
+        "L_hat_data_mean": L_hat_data_per_seed.mean(axis=0),
+        "L_hat_data_std": L_hat_data_per_seed.std(axis=0),
+        "L_hat_data_min": L_hat_data_per_seed.min(axis=0),
+        "L_hat_data_max": L_hat_data_per_seed.max(axis=0),
+        "L_hat_model_mean": L_hat_model_per_seed.mean(axis=0),
+        "L_hat_model_std": L_hat_model_per_seed.std(axis=0),
+        "L_hat_model_min": L_hat_model_per_seed.min(axis=0),
+        "L_hat_model_max": L_hat_model_per_seed.max(axis=0),
+    }
+
+
+def run_gap_N_sweep_seed_averaged(n_seeds=5, N_values=(50, 100, 200, 500, 1000, 2000, 5000),
+                                   held_out_grid_size=2000, verbose=True):
+    """Driver entry point mirroring run_sweeps()'s own pattern: builds the
+    same Tier B ground truth + held-out grid, runs the seed-averaged gap
+    N-sweep, prints the mean +- std of L_hat_model at the largest N (the
+    direct answer to "does the non-monotonicity survive averaging"), saves
+    a results/ .npz with both per-seed and aggregated arrays, saves the
+    seed-averaged plot, and returns everything (including the per-seed
+    arrays, for inspecting individual trajectories).
+    """
+    components, L_star, x_star = build_tier_b_1d()
+    held_out_grid = torch.linspace(DOMAIN[0], DOMAIN[1], held_out_grid_size).unsqueeze(-1)
+
+    if verbose:
+        print(f"=== Seed-averaged gap N-sweep: L* = {L_star:.4f} (x* = {x_star.tolist()}), n_seeds={n_seeds} ===")
+
+    result = sweep_over_N_seed_averaged(
+        "gap", components, L_star, x_star, held_out_grid, N_values=N_values,
+        n_seeds=n_seeds, verbose=verbose)
+
+    largest_N = result["N_values"][-1]
+    mean_at_largest_N = result["L_hat_model_mean"][-1]
+    std_at_largest_N = result["L_hat_model_std"][-1]
+    print(f"\nL_hat_model at N={largest_N}: {mean_at_largest_N:.4f} +/- {std_at_largest_N:.4f} "
+          f"(mean +/- std across {n_seeds} seeds; L*={L_star:.4f})")
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    np.savez(RESULTS_DIR / "step7_N_sweep_gap_seed_averaged.npz", L_star=L_star, **result)
+    fig = plots.plot_seed_averaged_sweep(
+        result, L_star, xlabel="N (training samples)",
+        title=f"L* vs. N (gap sampling, {n_seeds}-seed average)",
+        save_path=RESULTS_DIR / "step7_N_sweep_gap_seed_averaged.png")
+
+    return {"L_star": L_star, "x_star": x_star, "figure": fig, **result}
 
 
 # ---------------------------------------------------------------------------

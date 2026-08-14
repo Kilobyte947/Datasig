@@ -22,11 +22,13 @@ from mnist_lipschitz.estimators import (
     euclidean_distance_fn,
     pairwise_lipschitz,
     pairwise_lipschitz_all,
-    ratio_for_pairs,
+    ratio_and_components_for_pairs,
     local_perturbation_lipschitz,
     gradient_norm_estimate,
 )
-from mnist_lipschitz.distance import pixel_covariance, ridge_precision, make_mahalanobis_distance_fn
+from mnist_lipschitz.distance import (
+    pixel_covariance, ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
+)
 
 torch.set_default_dtype(torch.float64)
 
@@ -256,7 +258,8 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
 
     near_ii = torch.arange(x_subset.shape[0]).repeat_interleave(k_neighbors)
     near_jj = torch.as_tensor(neighbor_idx.reshape(-1), dtype=torch.long)
-    near_ratio = ratio_for_pairs(model, x_subset, y_subset, margin_fn, distance_fn, near_ii, near_jj)
+    near_ratio, near_dist, near_margin_diff = ratio_and_components_for_pairs(
+        model, x_subset, y_subset, margin_fn, distance_fn, near_ii, near_jj)
 
     # Deduplicated by canonical (min(i,j), max(i,j)): mutual nearest
     # neighbors produce both (i,j) and (j,i) in near_ii/near_jj with the
@@ -273,11 +276,17 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
         if canonical in seen_canonical:
             continue
         seen_canonical.add(canonical)
+        # Trailing (dist, margin_diff) fields beyond the 7 plot_image_pairs
+        # needs -- it slices to the first 7 and ignores the rest, so this
+        # stays compatible with every other caller that builds plain
+        # 7-tuples (e.g. run_mnist_experiment's argmax_pair_lr_euclidean).
         top_near_neighbor_pairs.append((
             x_subset[i].numpy(), x_subset[j].numpy(),
             y_subset[i].item(), preds_subset[i].item(),
             y_subset[j].item(), preds_subset[j].item(),
             near_ratio[k].item(),
+            near_dist[k].item(),
+            near_margin_diff[k].item(),
         ))
         if len(top_near_neighbor_pairs) >= top_k_images:
             break
@@ -316,7 +325,7 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
 
 def run_mnist_experiment(
     epochs_lr=15, epochs_mlp=15, epochs_cnn=8, mlp_hidden_sizes=(128,),
-    n_lipschitz_points=300, local_radius=1.0, n_directions=20,
+    n_lipschitz_points=1000, local_radius=1.0, n_directions=20,
     epsilon_values=(1e-6, 1e-4, 1e-2, 1e-1, 1.0, 10.0, 100.0),
     n_subsamples=10, subsample_frac=0.8, stability_n_points=100,
     max_cond=1e4, max_cv=0.05,
@@ -411,6 +420,7 @@ def run_mnist_experiment(
     if verbose:
         print("\n=== Step 3: epsilon selection ===")
     Sigma = pixel_covariance(train.x_flat)
+    eigenvalues = covariance_eigenvalues(Sigma)
     cond_numbers = sweep_epsilon(Sigma, list(epsilon_values))
     stability_results = epsilon_stability_check(
         lr_model, train, list(epsilon_values), n_subsamples=n_subsamples,
@@ -486,6 +496,7 @@ def run_mnist_experiment(
     for name, r in mahalanobis_results.items():
         arrays[f"mahalanobis_{name}_local"] = np.array(r["local_vals"])
         arrays[f"mahalanobis_{name}_grad"] = np.array(r["grad_vals"])
+    arrays["covariance_eigenvalues"] = eigenvalues.numpy()
     for r in ratio_dist_euclidean_results.values():
         arrays.update(r["arrays"])
     for r in ratio_dist_mahalanobis_results.values():
@@ -506,6 +517,8 @@ def run_mnist_experiment(
         "cond_numbers": cond_numbers,
         "cv_values": cv_values,
         "epsilon_values": list(epsilon_values),
+        "Sigma": Sigma,
+        "covariance_eigenvalues": eigenvalues,
     }
 
 

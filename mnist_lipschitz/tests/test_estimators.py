@@ -11,6 +11,8 @@ from mnist_lipschitz.estimators import (
     pairwise_lipschitz,
     local_perturbation_lipschitz,
     gradient_norm_estimate,
+    ratio_and_components_for_pairs,
+    ratio_for_pairs,
 )
 
 # --- Critical checkpoint: closed-form agreement on logistic regression ---
@@ -168,3 +170,25 @@ def test_gradient_norm_estimate_mahalanobis_matches_independent_closed_form():
     margin_diff = (margin_fn(model, x1.unsqueeze(0), y_batch[:1])
                    - margin_fn(model, x0.unsqueeze(0), y_batch[:1])).abs().item()
     assert abs(margin_diff / maha_dist.item() - expected) < 1e-6
+
+
+def test_ratio_and_components_for_pairs_matches_ratio_for_pairs_and_is_self_consistent():
+    """ratio_and_components_for_pairs must (a) return the same ratio
+    ratio_for_pairs does -- it's a refactor of the same shared logic, not
+    a reimplementation -- and (b) its own returned components must satisfy
+    ratio == margin_diff / dist exactly, since that's the definition."""
+    torch.manual_seed(9)
+    model = LogisticRegressionModel(input_dim=10, num_classes=4)
+    x_batch = torch.randn(12, 10)
+    y_batch = torch.randint(0, 4, (12,))
+    ii = torch.tensor([0, 1, 2, 3, 4])
+    jj = torch.tensor([5, 6, 7, 8, 9])
+
+    ratio, dist, margin_diff = ratio_and_components_for_pairs(
+        model, x_batch, y_batch, margin_fn, euclidean_distance_fn, ii, jj)
+    expected_ratio = ratio_for_pairs(model, x_batch, y_batch, margin_fn, euclidean_distance_fn, ii, jj)
+
+    assert torch.allclose(ratio, expected_ratio)
+    assert torch.allclose(ratio, margin_diff / dist.clamp_min(1e-12), atol=1e-9)
+    assert (dist >= 0).all()
+    assert (margin_diff >= 0).all()

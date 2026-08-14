@@ -6,7 +6,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mnist_lipschitz.data import load_mnist, get_dev_subset
-from mnist_lipschitz.distance import pixel_covariance, ridge_precision, mahalanobis_distance
+from mnist_lipschitz.distance import pixel_covariance, ridge_precision, mahalanobis_distance, covariance_eigenvalues
 
 
 def test_mahalanobis_converges_to_scaled_euclidean_as_epsilon_grows():
@@ -61,6 +61,39 @@ def test_ridge_precision_well_conditioned_despite_singular_raw_covariance():
     # (Sigma + eps*I) @ precision should be close to the identity.
     identity_check = Sigma_ridge @ precision
     assert torch.allclose(identity_check, torch.eye(784), atol=1e-6)
+
+
+def test_covariance_eigenvalues_sorted_descending_and_nonnegative():
+    torch.manual_seed(2)
+    d = 30
+    A = torch.randn(d, d)
+    Sigma = A @ A.T  # PSD by construction
+
+    eigenvalues = covariance_eigenvalues(Sigma)
+
+    assert eigenvalues.shape == (d,)
+    # descending order
+    assert (eigenvalues[:-1] >= eigenvalues[1:] - 1e-9).all()
+    # PSD -> eigenvalues should be (numerically) non-negative
+    assert eigenvalues.min().item() > -1e-8
+    # matches torch.linalg.eigvalsh directly, just reordered
+    expected = torch.linalg.eigvalsh(Sigma).flip(0)
+    assert torch.allclose(eigenvalues, expected)
+
+
+def test_covariance_eigenvalues_on_real_mnist_confirms_rank_deficiency():
+    """Direct visibility into the same singularity test_ridge_precision_well_conditioned_despite_singular_raw_covariance
+    already checks via matrix_rank/cond: the smallest eigenvalues of the
+    real pixel covariance should be ~0 (border pixels are constant zero
+    across every image)."""
+    train = load_mnist(train=True)
+    dev = get_dev_subset(train, n=2000, seed=0)
+    Sigma = pixel_covariance(dev.x_flat)
+
+    eigenvalues = covariance_eigenvalues(Sigma)
+    assert eigenvalues.shape == (784,)
+    assert eigenvalues[0].item() > eigenvalues[-1].item()
+    assert eigenvalues[-1].item() < 1e-6, "expected the smallest eigenvalue to be ~0 (rank-deficient covariance)"
 
 
 def test_mahalanobis_distance_symmetric_and_nonnegative():

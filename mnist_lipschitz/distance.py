@@ -50,3 +50,15 @@ def make_mahalanobis_distance_fn(precision):
     """Returns a distance_fn(x, y) closure over a fixed precision matrix,
     for direct use as estimators.py's `distance_fn` argument."""
     return lambda x, y: mahalanobis_distance(x, y, precision)
+
+
+def covariance_eigenvalues(Sigma):
+    """Eigenvalues of the (symmetric, PSD) pixel covariance Sigma, sorted
+    descending. `torch.linalg.eigvalsh` assumes/exploits symmetry and
+    returns them ascending, so this just flips the order. Sigma is exactly
+    singular in practice (MNIST's constant-zero border pixels), so the
+    smallest eigenvalues are expected to be ~0 -- the same rank-deficiency
+    `ridge_precision`'s epsilon exists to fix, made visible directly here
+    rather than only inferred from the condition number."""
+    eigenvalues = torch.linalg.eigvalsh(Sigma)
+    return eigenvalues.flip(0)

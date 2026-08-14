@@ -23,7 +23,11 @@ Two headline results:
 - Training on a dataset with a deliberate sampling gap near the steepest
   region of `f*` causes the trained model to *flatten* (undershoot `L*`)
   there, and this undershoot persists even as model capacity grows (Steps
-  6-7) — though the effect is much weaker in 2D than in 1D (Step 8).
+  6-7) — though the effect is much weaker in 2D than in 1D (Step 8). It
+  also persists as `N` grows: a single-seed N-sweep on the gap dataset
+  looked non-monotonic enough to be suspicious, but a 5-seed average shows
+  the undershoot holding steady rather than resolving with more data (see
+  [Key results](#key-results)).
 - All of the above implicitly assumes plain Euclidean distance is the
   right way to measure "closeness" between input points. Step 9 tests
   that assumption directly: switching to a Mahalanobis distance derived
@@ -41,13 +45,14 @@ See [Key results](#key-results) below for the numbers.
 | `estimators.py` | The three core estimators — `pairwise_lipschitz`, `local_perturbation_lipschitz`, `gradient_norm_estimate` — plus grid-evaluating variants (`gradient_norm_estimate_grid`, `local_perturbation_lipschitz_grid`) that return the full array of per-point estimates, needed for the sweep and heatmap plots. `pairwise_lipschitz` and `local_perturbation_lipschitz` (+ their grid variants) also accept an optional `embed_fn`/`precision` pair (Step 9): supply both to measure distance as Mahalanobis distance in an embedded feature space instead of plain Euclidean; leave both unset and behavior is unchanged. `local_sample_density` counts nearby training points per query location (a coverage diagnostic, not a Lipschitz estimate) — used in Step 8 alongside the Lipschitz heatmaps, plotted separately rather than merged into them. This module is meant to become the first draft of a shared `lipschitz_diagnostics.py` for Experiments 2-4. |
 | `embeddings.py` | **New in Step 9.** `polynomial_embedding` (`x -> (x, x^2, ..., x^degree)`, 1D only), `augmented_embedding` (the same, with `f(x)` appended as an extra feature — implemented but deliberately not used anywhere, see [Design decisions](#design-decisions)), `empirical_covariance`, `precision_from_covariance` (inverts the covariance to get the quadratic-form matrix for Mahalanobis distance). |
 | `models.py` | `TinyMLP` (configurable depth/width, tanh or relu), `SingleTanhUnit` (matches the Tier A functional form exactly, used only for the sanity check), `train_regressor` (plain MSE/Adam training loop; its `seed` argument only covers randomness inside this function, not the model's weight initialization — see [Design decisions](#design-decisions)). |
-| `plots.py` | All plotting logic. Original: `plot_gap_vs_uniform` (f*, f_hat, and local-Lipschitz-vs-x with a training-point rug plot, gap vs. uniform side by side), `plot_sweep` (3-curve L* / L_hat_data / L_hat_model vs. N or width), `plot_2d_heatmaps` (true/model/finite-diff gradient-norm heatmaps with training points overlaid). Added for Step 9: `plot_local_vs_global_lipschitz` (global scalar estimates as reference lines, local curves overlaid, plain vs. Mahalanobis, gap vs. uniform side by side), `plot_degree_sweep` (relative error vs. `L*` and covariance condition number, both vs. polynomial embedding degree). `plot_coverage_heatmap` (the `local_sample_density` diagnostic, Step 8, plotted separately from the Lipschitz heatmaps so "tested and smooth" stays visually distinct from "never tested"). |
-| `run_experiment.py` | Driver wiring everything together. Original: `run_tier_a_sanity`, `run_main_experiment` (Tier B, gap vs. uniform), `run_sweeps` (N-sweep and capacity-sweep, both dataset types), `run_2d_extension` (Step 8 — now also computes and saves the coverage-density diagnostic alongside the three Lipschitz heatmaps, see [Key results](#key-results)). Added since: `run_tier_a_gap_demo` (Tier A analogue of the gap-vs-uniform comparison, using `TinyMLP` instead of `SingleTanhUnit` so undershoot is actually observable — also computes the Mahalanobis-vs-plain local/global comparison used in Step 9's plot), `run_metric_embedding_check` and `sweep_polynomial_degree` (Step 9's global metric comparison and degree selection), `build_gap_dataset_and_embedding` (shared setup for both), `run_cross_architecture_check` (defined and included in `main()`, but not called from the notebook — see [Status](#status)). Saves figures and `.npz` results to `results/`. |
+| `plots.py` | All plotting logic. Original: `plot_gap_vs_uniform` (f*, f_hat, and local-Lipschitz-vs-x with a training-point rug plot, gap vs. uniform side by side), `plot_sweep` (3-curve L* / L_hat_data / L_hat_model vs. N or width), `plot_2d_heatmaps` (true/model/finite-diff gradient-norm heatmaps with training points overlaid). Added for Step 9: `plot_local_vs_global_lipschitz` (global scalar estimates as reference lines, local curves overlaid, plain vs. Mahalanobis, gap vs. uniform side by side), `plot_degree_sweep` (relative error vs. `L*` and covariance condition number, both vs. polynomial embedding degree). `plot_coverage_heatmap` (the `local_sample_density` diagnostic, Step 8, plotted separately from the Lipschitz heatmaps so "tested and smooth" stays visually distinct from "never tested"). `plot_seed_averaged_sweep` (mean `L_hat_model` curve with a shaded ±1-std/min-max spread band, faint individual-seed trajectories, mean `L_hat_data`, and the `L*` line — additive alongside `plot_sweep`, which is unchanged and still used for every single-seed sweep). |
+| `run_experiment.py` | Driver wiring everything together. Original: `run_tier_a_sanity`, `run_main_experiment` (Tier B, gap vs. uniform), `run_sweeps` (N-sweep and capacity-sweep, both dataset types), `run_2d_extension` (Step 8 — now also computes and saves the coverage-density diagnostic alongside the three Lipschitz heatmaps, see [Key results](#key-results)). Added since: `run_tier_a_gap_demo` (Tier A analogue of the gap-vs-uniform comparison, using `TinyMLP` instead of `SingleTanhUnit` so undershoot is actually observable — also computes the Mahalanobis-vs-plain local/global comparison used in Step 9's plot), `run_metric_embedding_check` and `sweep_polynomial_degree` (Step 9's global metric comparison and degree selection), `build_gap_dataset_and_embedding` (shared setup for both), `run_cross_architecture_check` (defined and included in `main()`, but not called from the notebook — see [Status](#status)), `sweep_over_N_seed_averaged`/`run_gap_N_sweep_seed_averaged` (repeats the gap dataset's N-sweep across multiple seeds and aggregates, to check whether the single-seed non-monotonicity is real or noise — see [Key results](#key-results); additive, called from the notebook but not from `run_sweeps()`/`main()`, see [Status](#status)). Saves figures and `.npz` results to `results/`. |
 | `new_distance_measure.md` | **New in Step 9.** Standalone write-up of the Mahalanobis-in-polynomial-embedding extension (the idea, the headline result table, the degree-selection table, and why `f(x)` was deliberately left out of the embedding) plus the Step 8 coverage-density finding. |
 | `tests/test_tier_a_closed_form.py` | Checks the hand-derived analytic gradient against `torch.autograd.grad` — must pass before anything else is trusted. |
 | `tests/test_estimators.py` | Checks `pairwise_lipschitz` converges toward `tier_a_true_L` as N grows, and `gradient_norm_estimate` matches it almost exactly at the true argmax. Also checks the Mahalanobis path (Step 9): `pairwise_lipschitz` under a degree-1 polynomial embedding reduces to a closed-form scaled-Euclidean identity, and `local_perturbation_lipschitz` under an embedding converges to its analytic pointwise pullback-metric value as the perturbation radius shrinks. |
-| `notebook_toy_lipschitz.ipynb` | Thin driver notebook — imports from this package and displays the figures produced by `run_experiment.py`. Contains no reusable logic of its own. Covers Steps 5 through 9 (see [Notebook contents](#notebook-contents)). |
-| `results/` | Generated outputs (git-ignored except `.gitkeep`): step6/7/8 plots (including `step8_coverage_heatmap.png`) and `.npz` result arrays, plus Step 9's `tier_a_gap_vs_uniform.png`, `tier_a_local_vs_global_lipschitz.png`, and `degree_sweep.png`. |
+| `tests/test_seed_averaged_sweep.py` | Checks `sweep_over_N_seed_averaged` returns per-seed and aggregated arrays of the expected shape for every requested `N` and seed, and that `n_seeds=1` reproduces `sweep_over_N`'s own single-seed output *exactly* — a regression check that adding the new `seed` parameter to `sweep_over_N` didn't change its existing default behavior. |
+| `notebook_toy_lipschitz.ipynb` | Thin driver notebook — imports from this package and displays the figures produced by `run_experiment.py`. Contains no reusable logic of its own. Covers Steps 5 through 9, plus the seed-averaged gap N-sweep follow-up after Step 7 (see [Notebook contents](#notebook-contents)). |
+| `results/` | Generated outputs (git-ignored except `.gitkeep`): step6/7/8 plots (including `step8_coverage_heatmap.png` and `step7_N_sweep_gap_seed_averaged.png`/`.npz`) and `.npz` result arrays, plus Step 9's `tier_a_gap_vs_uniform.png`, `tier_a_local_vs_global_lipschitz.png`, and `degree_sweep.png`. |
 
 ## Notebook contents
 
@@ -63,15 +68,20 @@ See [Key results](#key-results) below for the numbers.
    gap-vs-uniform comparison on the harder Tier B (multi-ridge) function.
 4. **Step 7** — N-sweep and capacity-sweep (`run_sweeps`), both dataset
    types, `L*` printed explicitly alongside the curves.
-5. **Step 8** — 2D extension (`run_2d_extension`): the three Lipschitz
+5. **Seed-averaged gap N-sweep follow-up** (`run_gap_N_sweep_seed_averaged`):
+   checks whether Step 7's non-monotonic gap-dataset N-sweep is a real
+   effect or single-seed noise, by repeating it across 5 seeds and
+   plotting the mean, spread, and individual seed trajectories. See
+   [Key results](#key-results).
+6. **Step 8** — 2D extension (`run_2d_extension`): the three Lipschitz
    heatmaps over `[-5,5]^2`, plus a coverage-density heatmap showing how
    many training points actually landed near each grid point, and what
    that reveals about the default sampling settings (see
    [Key results](#key-results)).
-6. **Step 9** — does the distance metric matter? (`run_metric_embedding_check`,
+7. **Step 9** — does the distance metric matter? (`run_metric_embedding_check`,
    `sweep_polynomial_degree`, and the local-vs-global figure computed
    earlier in the Tier A gap demo). See [Key results](#key-results) below.
-7. **Summary and status** cell.
+8. **Summary and status** cell.
 
 ## Design decisions
 
@@ -85,6 +95,7 @@ See [Key results](#key-results) below for the numbers.
 - **The polynomial embedding never includes `f(x)`** — `augmented_embedding` supports appending `f(x)` as a feature, but using it to measure the Lipschitz behavior of the *same* function it's built from turns out to be self-cancelling (checked directly, not assumed): it collapses the gap-vs-uniform local-Lipschitz contrast from ~6x down to ~1x, erasing exactly the effect this whole project exists to detect. Full explanation in `new_distance_measure.md`.
 - **Embedding degree 3 was chosen by measuring, not guessing** — `sweep_polynomial_degree` checks both accuracy against `L*` and the condition number of the fitted covariance, since a higher degree can look more accurate on one dataset while being numerically fragile (collinear polynomial powers on a bounded domain). Degree 3 is the lowest degree that is both accurate (~0.08% error) and well-conditioned (~1.5e3); degrees 5-6 look tempting on raw feature count but blow past 1e6 condition number and lose accuracy along with it.
 - **The Mahalanobis extension is 1D only** — `polynomial_embedding` doesn't support `d=2`; extending it to the Tier B 2D dataset would need a 2D polynomial feature map.
+- **`sweep_over_N` gained a `seed` parameter, defaulting to the existing module-level `SEED`** — purely additive: neither the uniform nor the gap N-sweep inside `run_sweeps()` passes `seed=`, so both are unaffected (verified byte-identical printed output before/after this change). This is what lets `sweep_over_N_seed_averaged` repeat the exact same procedure at different seeds by calling `sweep_over_N` directly, rather than duplicating its ~15 lines.
 
 ## How to run it
 
@@ -104,6 +115,13 @@ agreement within tolerance, halts if not), `run_tier_a_gap_demo()`,
 `run_cross_architecture_check()`, `run_metric_embedding_check()`,
 `sweep_polynomial_degree()`.
 
+The seed-averaged gap N-sweep is opt-in and not part of `main()` (it's
+several times slower than a single-seed sweep) — run it directly:
+
+```bash
+.venv/bin/python -c "from toy_lipschitz.run_experiment import run_gap_N_sweep_seed_averaged; run_gap_N_sweep_seed_averaged(n_seeds=5)"
+```
+
 ## Key results
 
 - **Tier A sanity check**: `L*`, `L_hat_data`, and all three `L_hat_model`
@@ -118,6 +136,22 @@ agreement within tolerance, halts if not), `run_tier_a_gap_demo()`,
   finite-difference local-Lipschitz curve peaks noticeably lower near `x*`
   for the gap-sampled model than for the uniformly-sampled model — direct
   visual evidence of flattening/undershoot from sparse coverage.
+- **Seed-averaged N-sweep on the gap dataset** (`run_gap_N_sweep_seed_averaged`,
+  `results/step7_N_sweep_gap_seed_averaged.png`, new — not part of `run_sweeps()`/`main()`):
+  at the single seed `run_sweeps()` uses, the gap dataset's `L_hat_model`
+  vs. `N` curve is non-monotonic — it bounces between `~4.6` and `~8.4` as
+  `N` grows from 50 to 5000, unlike the uniform dataset's clean convergence.
+  Before trusting that as a finding, the identical sweep was repeated
+  across 5 seeds (varying both the sampled gap dataset and the model's
+  init/training) and averaged. The bounce turned out to be *mostly*
+  single-seed noise — individual-seed curves scatter widely at every `N`
+  — but averaging reveals a different, real effect: the mean `L_hat_model`
+  stays essentially **flat** at `~6.3-7.2` across the entire `N` range,
+  never climbing toward `L*=8.46` the way `L_hat_data` (data-only, no
+  model) does over the same range. At `N=5000`:
+  `L_hat_model = 6.89 ± 0.56` (mean ± std across 5 seeds) vs. `L*=8.46`.
+  So more gap-sampled data does not resolve the undershoot here either —
+  a persistent-plateau story, not a converges-with-noise one.
 - **Capacity sweep on the gap dataset** (`results/step7_capacity_sweep_gap.png`):
   `L_hat_model` stays persistently below both `L_hat_data` and `L*` across
   every hidden width tested (4 to 128) — increasing model capacity alone
@@ -166,12 +200,18 @@ sibling folder). `estimators.py` is written generally enough (arbitrary
 `f`, arbitrary `d`) to be imported directly by those experiments rather
 than reimplemented.
 
-One piece of the codebase exists and is exercised by `main()` / `tests/`,
+One piece of the codebase exists and is exercised by `tests/` and `main()`,
 but is **not yet wired into the notebook**: `run_cross_architecture_check`
 (a 2x2 check of whether matching the model's activation to `f*`'s
 functional form — smooth tanh vs. piecewise-linear ReLU — affects
 recovery). A candidate for a future write-up rather than a gap in the
 current one.
+
+`sweep_over_N_seed_averaged` / `run_gap_N_sweep_seed_averaged` *is* now
+wired into the notebook (as a follow-up check right after Step 7), but
+deliberately **not** into `main()` — it's several times slower than a
+single-seed sweep, so it's kept opt-in rather than part of the standard
+run (call it directly, see [How to run it](#how-to-run-it)).
 
 The Step 8 2D undershoot effect (~9% average) is real but noticeably
 weaker than the 1D case (20-50%+), and why is not yet established — see
