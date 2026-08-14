@@ -1,4 +1,4 @@
-"""This file defines how training points get sampled"""
+"""This file defines how training points get sampled, and how densely they cover a region (local_sample_density)."""
 
 import torch
 
@@ -6,6 +6,17 @@ torch.set_default_dtype(torch.float64)
 
 def _generator(seed):
     return torch.Generator().manual_seed(seed) if seed is not None else None
+
+def _as_tensor(v):
+    return torch.as_tensor(v, dtype=torch.get_default_dtype())
+
+def _norm(v, norm, dim=-1):
+    """Ordinary straight-line distance between two points, sqrt(sum((x_i - x_j)^2)). Used by local_sample_density."""
+    if norm == "l2":
+        return v.norm(p=2, dim=dim)
+    elif norm == "l1":
+        return v.norm(p=1, dim=dim)
+    raise ValueError(f"unknown norm: {norm}")
 
 def sample_uniform(N, domain, d, seed=None):
     """Scatters N uniform i.i.d. points evenly at random across the domain. Returns (N, d)."""
@@ -72,3 +83,15 @@ def sample_with_gap(N, domain, d, gap_center, gap_radius, gap_fraction, seed=Non
 def make_dataset(f_star, x):
     """Return (x, y) with y = f_star(x). f_star is always evaluated exactly"""
     return x, f_star(x)
+
+
+def local_sample_density(x_query, x_train, radius, norm="l2"):
+    """This is not a Lipschitz quantity. It is a convergence coverage check (a count).
+    For each query point, count training points within `radius` (per `norm`).
+    A low local Lipschitz estimate can mean "genuinely smooth here" or  just "barely sampled here," and this is what tells the two apart.
+    """
+    x_query = _as_tensor(x_query)
+    x_train = _as_tensor(x_train)
+    diff = x_query.unsqueeze(1) - x_train.unsqueeze(0)  # (Q, N, d)
+    dist = _norm(diff, norm, dim=-1)
+    return (dist <= radius).sum(dim=-1)

@@ -7,7 +7,7 @@ from toy_lipschitz.toy_functions import(
     tier_a_f, tier_a_true_L, tier_b_f, tier_b_grad, tier_b_true_L,
     piecewise_ramp_f, piecewise_ramp_true_L, piecewise_sum_f, piecewise_sum_true_L,
 )
-from toy_lipschitz.data import sample_uniform, sample_with_gap, make_dataset
+from toy_lipschitz.data import sample_uniform, sample_with_gap, make_dataset, local_sample_density
 from toy_lipschitz.models import SingleTanhUnit, TinyMLP, train_regressor
 from toy_lipschitz.estimators import (
     pairwise_lipschitz,
@@ -15,7 +15,6 @@ from toy_lipschitz.estimators import (
     gradient_norm_estimate,
     gradient_norm_estimate_grid,
     local_perturbation_lipschitz_grid,
-    local_sample_density,
 )
 from toy_lipschitz.embeddings import polynomial_embedding, empirical_covariance, precision_from_covariance
 from toy_lipschitz import plots
@@ -27,11 +26,13 @@ SEED = 0
 torch.set_default_dtype(torch.float64)
 
 # ---------------------------------------------------------------------------
-# Tier A sanity run
+# Tier A
 # ---------------------------------------------------------------------------
 
 def run_tier_a_sanity(tol=0.10, verbose=True):
-    """Tier A sanity check: single ridge, closed-form L*, and three different estimation methods (pairwise, local perturbation, gradient norm) all return L_hat within `tol` of L*."""
+    """Build the simple single-ridge ground truth, sample data, compute L_hat_data (pairwise ratio using only real data, no model at all), 
+    train SingleTanhUnit (the shape-matched model), then compute all three model-based estimates. 
+    Every single one is checked against the true L* with an assertion — if any of them are more than 10% off, the code stops with an error."""
     torch.manual_seed(SEED)
     w = torch.tensor([4.0])
     b = 0.5
@@ -78,21 +79,16 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
 
     return results
 
-
-# ---------------------------------------------------------------------------
-# Tier A gap demo (single ridge, closed-form L*, gap vs. uniform sampling)
-# ---------------------------------------------------------------------------
-
 def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fraction=0.02,
                          local_radius=0.2, local_n_samples=200, hidden_sizes=(64, 64),
                          epochs=3000, lr=1e-2, grid_size=1000, poly_degree=3, verbose=True):
-    """Gap-vs-uniform sampling comparison on the single-ridge f* (closed-form L* = A*||w||). 
-    Uses TinyMLP rather than SingleTanhUnit, since a model that must learn f*'s shape from data 
-    can be starved by a sampling gap, unlike one whose architecture matches f* exactly.
+    """Run a demo comparing gap and uniform sampling on a single-ridge f* (closed-form L* = A*||w||). 
+    Uses a TinyMLP (which has to learn the shape from data, unlike SingleTanhUnit) to fit the data, 
+    and computes the estimates on a grid of points.
 
     Also computes the Mahalanobis-in-embedding counterpart of every plain-Euclidean quantity, 
-    using a degree-`poly_degree` polynomial embedding of x (f*(x) itself is deliberately excluded 
-    from the embedding - see new_distance_measure.md for why, and for the degree selection in sweep_polynomial_degree).
+    using a degree-`poly_degree` polynomial embedding of x and makes comparisons of the two distances. 
+    The polynomial embedding is used to compute a Mahalanobis distance that can be more sensitive to the local geometry of the data, especially in the presence of gaps.
     """
     w_t = torch.tensor(w)
     L_star = tier_a_true_L(w_t, A, norm="l2")
@@ -176,15 +172,11 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
             "figure": fig, "figure_local_vs_global": fig_local_vs_global}
 
 
-# ---------------------------------------------------------------------------
-# Metric extension: plain Euclidean vs. Mahalanobis-in-polynomial-embedding
-# ---------------------------------------------------------------------------
 
 def build_gap_dataset_and_embedding(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
                                      gap_radius=0.5, gap_fraction=0.02, seed=SEED):
-    """Shared setup for run_metric_embedding_check and sweep_polynomial_degree: 
-    the Tier A gap-sampled dataset, plus an embed_fn from (x, x^2, ..., x^degree). Excludes f*(x) -- see new_distance_measure.md.
-    """
+    """Builds a gap-sampled dataset and a polynomial embedding function for the Tier A single-ridge ground truth."""
+
     w_t = torch.tensor(w)
     L_star = tier_a_true_L(w_t, A, norm="l2")
     f_star = lambda x: tier_a_f(x, w_t, b, A)
@@ -198,10 +190,8 @@ def build_gap_dataset_and_embedding(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
 
 def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
                                 gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
-    """Compares L_hat_data on the Tier A gap-sampled dataset under two distances: 
-    plain Euclidean in x, and Mahalanobis distance in a degree-`degree` polynomial embedding of x, 
-    using the empirical covariance of the embedded training points.
-    """
+    """Builds a gap-sampled dataset and a polynomial embedding function, then computes the pairwise Lipschitz estimate both in plain Euclidean space and in the Mahalanobis distance induced by the embedding. 
+    Returns both estimates along with the true L* for comparison."""
     x_train, y_train, L_star, f_star, embed_fn = build_gap_dataset_and_embedding(
         N=N, w=w, b=b, A=A, degree=degree, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=seed)
 
@@ -258,7 +248,7 @@ def sweep_polynomial_degree(degrees=(1, 2, 3, 4, 5, 6), N=400, w=(4.0,), b=0.5, 
 
 
 # ---------------------------------------------------------------------------
-# Tier B setup
+# Tier B
 # ---------------------------------------------------------------------------
 
 def build_tier_b_1d():
@@ -305,6 +295,7 @@ def train_tiny_mlp(x_train, y_train, hidden_sizes=(64, 64), activation="tanh", e
 
 def run_main_experiment(N=400, gap_radius=0.5, gap_fraction=0.02, local_radius=0.2, local_n_samples=200,
                          hidden_sizes=(64, 64), epochs=3000, lr=1e-2, grid_size=1000, verbose=True):
+    """Run the main Tier B experiment comparing gap and uniform sampling on a 1D piecewise-ridge f*, similar to the Tier A demo but with a more complex ground truth."""
     components, L_star, x_star = build_tier_b_1d()
     f_star = lambda x: tier_b_f(x, components)
     if verbose:
@@ -365,8 +356,8 @@ def run_main_experiment(N=400, gap_radius=0.5, gap_fraction=0.02, local_radius=0
 
 
 # ---------------------------------------------------------------------------
-# Cross-architecture check: does model activation matching f*'s functional
-# form (tanh vs. relu, smooth vs. piecewise-linear) help recover L*?
+# Cross-architecture check: does model activation matching f*'s 
+# functional form (tanh vs. relu, smooth vs. piecewise-linear) help recover L*?
 # ---------------------------------------------------------------------------
 
 def build_tier_a_pl():
@@ -378,10 +369,8 @@ def build_tier_a_pl():
 
 def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1e-2,
                                   grid_size=2000, verbose=True):
-    """2x2 comparison: {tanh_ridge, piecewise_ramp} ground truth crossed
-    with {tanh, relu} model activation. Extends the Tier A sanity-check
-    idea (model form matches f* form) into an explicit matched-vs-
-    mismatched test.
+    """2x2 comparison: {tanh_ridge, piecewise_ramp} ground truth crossed with {tanh, relu} model activation. 
+    Extends the Tier A sanity-check idea (model form matches f* form) into an explicit matched-vs-mismatched test.
     """
     torch.manual_seed(SEED)
     x_grid = torch.linspace(DOMAIN[0], DOMAIN[1], grid_size).unsqueeze(-1)
@@ -444,13 +433,9 @@ def _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction
 
 def sweep_over_N(dataset_type, components, L_star, x_star, held_out_grid, N_values=(50, 100, 200, 500, 1000, 2000, 5000),
                   hidden_sizes=(64, 64), epochs=2000, lr=1e-2, gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
-    """`seed` controls both the sampled dataset (_build_dataset) and the
-    model's init/training (train_tiny_mlp) at every N. Defaults to the
-    module-level SEED, so existing callers that don't pass `seed=`
-    (run_sweeps(), for both the uniform and gap N-sweeps) are unaffected --
-    this parameter exists so sweep_over_N_seed_averaged can repeat the
-    exact same procedure at different seeds without duplicating this
-    function's logic."""
+    """Sweep over different values of N and compute the corresponding L_hat_data and L_hat_model.
+    Returns two arrays: L_hat_data_vals and L_hat_model_vals, each of shape (len(N_values),).
+    """
     L_hat_data_vals, L_hat_model_vals = [], []
     for N in N_values:
         x_train, y_train = _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction, seed=seed)
@@ -470,6 +455,9 @@ def sweep_over_N(dataset_type, components, L_star, x_star, held_out_grid, N_valu
 
 def sweep_over_capacity(dataset_type, components, L_star, x_star, held_out_grid, widths=(4, 8, 16, 32, 64, 128),
                          N=500, epochs=2000, lr=1e-2, gap_radius=0.5, gap_fraction=0.02, verbose=True):
+    """Sweep over different model capacities (hidden layer widths) and compute the corresponding L_hat_data and L_hat_model. 
+    Returns two arrays: L_hat_data_vals and L_hat_model_vals, each of shape (len(widths),).
+    """
     x_train, y_train = _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction, seed=SEED)
     L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
@@ -489,6 +477,7 @@ def sweep_over_capacity(dataset_type, components, L_star, x_star, held_out_grid,
 
 def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16, 32, 64, 128),
                capacity_N=500, held_out_grid_size=2000, verbose=True):
+    """Run the main sweeps over N and model capacity for both uniform and gap datasets, and save the results and plots."""
     components, L_star, x_star = build_tier_b_1d()
     held_out_grid = torch.linspace(DOMAIN[0], DOMAIN[1], held_out_grid_size).unsqueeze(-1)
 
@@ -526,28 +515,17 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
 
 
 # ---------------------------------------------------------------------------
-# Seed-averaged gap-dataset N-sweep: is the single-seed non-monotonicity
-# (L_hat_model bouncing between ~4.6 and ~8.4 as N grows 50->5000, gap
-# dataset) a real effect of gap sampling, or single-seed noise? Standalone
-# addition -- not wired into run_sweeps() or main(), so the existing
-# single-seed sweep behavior (uniform and gap N-sweeps, both capacity
-# sweeps) is completely unaffected.
+# Seed-averaged N-sweep (to check if the non-monotonicity survives averaging)
 # ---------------------------------------------------------------------------
 
 def sweep_over_N_seed_averaged(dataset_type, components, L_star, x_star, held_out_grid,
                                 N_values=(50, 100, 200, 500, 1000, 2000, 5000), n_seeds=5, base_seed=SEED,
                                 hidden_sizes=(64, 64), epochs=2000, lr=1e-2, gap_radius=0.5, gap_fraction=0.02,
                                 verbose=True):
-    """Repeats sweep_over_N independently for `n_seeds` seeds
-    (base_seed, base_seed+1, ..., varying both the sampled dataset and the
-    model's init/training via sweep_over_N's `seed` parameter), holding
-    every other hyperparameter fixed, and returns both the raw per-seed
-    results and the aggregated mean/std/min/max across seeds for each N.
-
-    Generic over `dataset_type` (like sweep_over_N itself) even though it
-    exists specifically to check the gap dataset's N-sweep -- reuses
-    sweep_over_N rather than duplicating its logic, so it works identically
-    for "uniform" if ever needed.
+    """Repeats sweep_over_N independently for `n_seeds` seeds (base_seed, base_seed+1, ..., varying both the sampled dataset and the
+    model's init/training via sweep_over_N's `seed` parameter), holding every other hyperparameter fixed.
+    Returns both the raw per-seed results and the aggregated mean/std/min/max across seeds for each N.
+    Checks if the non-monotonicity observed in L_hat_model vs. N survives averaging over multiple random seeds.
     """
     seeds = [base_seed + i for i in range(n_seeds)]
     L_hat_data_per_seed, L_hat_model_per_seed = [], []
@@ -583,14 +561,7 @@ def sweep_over_N_seed_averaged(dataset_type, components, L_star, x_star, held_ou
 
 def run_gap_N_sweep_seed_averaged(n_seeds=5, N_values=(50, 100, 200, 500, 1000, 2000, 5000),
                                    held_out_grid_size=2000, verbose=True):
-    """Driver entry point mirroring run_sweeps()'s own pattern: builds the
-    same Tier B ground truth + held-out grid, runs the seed-averaged gap
-    N-sweep, prints the mean +- std of L_hat_model at the largest N (the
-    direct answer to "does the non-monotonicity survive averaging"), saves
-    a results/ .npz with both per-seed and aggregated arrays, saves the
-    seed-averaged plot, and returns everything (including the per-seed
-    arrays, for inspecting individual trajectories).
-    """
+    """Runs a seed-averaged sweep over N for the gap-sampled dataset, saving the results and a plot."""
     components, L_star, x_star = build_tier_b_1d()
     held_out_grid = torch.linspace(DOMAIN[0], DOMAIN[1], held_out_grid_size).unsqueeze(-1)
 
@@ -625,9 +596,6 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
                       local_n_samples=30, hidden_sizes=(64, 64), epochs=3000, lr=1e-2, verbose=True):
     """Extends the gap-sampling setup to d=2, producing three Lipschitz heatmaps (true / model / finite-difference) and a coverage-density
     heatmap (local_sample_density -> plot_coverage_heatmap) showing how many training points fall within local_radius of each grid point.
-
-    Default parameters do not produce genuine local undersampling at the hotspot - see new_distance_measure.md for the corrected gap_fraction
-    and the resulting undershoot measurement.
     """
     components, L_star, x_star = build_tier_b_2d()
     f_star = lambda x: tier_b_f(x, components)

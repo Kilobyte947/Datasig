@@ -7,6 +7,8 @@ These are kept as clearly separate functions throughout and are related but dist
 
 import torch
 
+from toy_lipschitz.embeddings import _mahalanobis_dist
+
 torch.set_default_dtype(torch.float64)
 
 def _generator(seed):
@@ -16,25 +18,12 @@ def _as_tensor(v):
     return torch.as_tensor(v, dtype=torch.get_default_dtype())
 
 def _norm(v, norm, dim=-1):
-    """Ordinary straight-line distance between two points, sqrt(sum((x_i - x_j)^2)). Used by pairwise_lipschitz and local_sample_density."""
+    """Ordinary straight-line distance between two points, sqrt(sum((x_i - x_j)^2)). Used by pairwise_lipschitz and local_perturbation_lipschitz (plain-distance fallback)."""
     if norm == "l2":
         return v.norm(p=2, dim=dim)
     elif norm == "l1":
         return v.norm(p=1, dim=dim)
     raise ValueError(f"unknown norm: {norm}")
-
-
-def _mahalanobis_dist(diff, precision):
-    """Weighted distance in embedded feature space: reweights each direction by `precision` (inverse covariance) instead of treating all
-    directions equally like plain Euclidean distance -- movement in directions the data naturally varies a lot counts for less than
-    movement in directions it barely varies at all. Reduces to plain Euclidean distance if `precision` is the identity matrix.
-
-    diff: (..., k) embedded-space differences (not raw x).
-    precision: (k, k), typically an inverse covariance.
-    Returns sqrt(diff^T @ precision @ diff), clamped at 0 first (guards against floating-point rounding pushing a near-zero value negative).
-    """
-    quad = torch.einsum("...i,ij,...j->...", diff, precision, diff)
-    return quad.clamp_min(0.0).sqrt()
 
 
 def pairwise_lipschitz(x, y, norm="l2", max_pairs=None, seed=None, embed_fn=None, precision=None):
@@ -188,15 +177,3 @@ def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=N
                                                   embed_fn=embed_fn, precision=precision)
         results[i] = L_hat
     return results
-
-
-def local_sample_density(x_query, x_train, radius, norm="l2"):
-    """This is not a Lipschitz quantity. It is a convergence coverage check (a count).
-    For each query point, count training points within `radius` (per `norm`). 
-    A low local Lipschitz estimate can mean "genuinely smooth here" or  just "barely sampled here," and this is what tells the two apart.
-    """
-    x_query = _as_tensor(x_query)
-    x_train = _as_tensor(x_train)
-    diff = x_query.unsqueeze(1) - x_train.unsqueeze(0)  # (Q, N, d)
-    dist = _norm(diff, norm, dim=-1)
-    return (dist <= radius).sum(dim=-1)

@@ -1,40 +1,27 @@
-"""The three Lipschitz sub-methods, generalized from toy_lipschitz/estimators.py
-to operate on a classifier's margin_fn over high-dimensional (784-d) MNIST
-inputs, under a pluggable distance metric (plain Euclidean or ridge-regularized
-Mahalanobis, see distance.py).
-
-Kept as three clearly separate functions throughout, exactly as in
-Experiment 1 -- local-perturbation and gradient-norm are related but
-distinct quantities and must never be conflated into a single "local
-estimate" without labeling which one it is.
+"""The three Lipschitz sub-methods (pairwise, local-perturbation, gradient-norm), generalized from toy_lipschitz/estimators.py to operate
+on a classifier's margin_fn over 784-d MNIST inputs, under a pluggable distance metric (Euclidean or Mahalanobis, see distance.py). 
+Kept as three separate functions throughout.
 """
 
 import torch
 
-torch.set_default_dtype(torch.float64)
+from mnist_lipschitz.distance import euclidean_distance_fn
 
+torch.set_default_dtype(torch.float64)
 
 def _generator(seed):
     return torch.Generator().manual_seed(seed) if seed is not None else None
-
-
-def euclidean_distance_fn(x, y):
-    """Plain L2 distance, row-wise if x/y are batches of the same length.
-    The default `distance_fn` for all three estimators below."""
-    return (x - y).norm(p=2, dim=-1)
 
 
 def pairwise_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,
                         max_pairs=None, seed=None):
     """L_hat = max_{i != j} |margin(x_i) - margin(x_j)| / distance_fn(x_i, x_j).
 
-    O(N^2) pairs for N points. At MNIST scale we keep N modest (a few
-    hundred points, passed in by the caller) rather than defaulting to
-    random pair subsampling -- with N ~ 200-300 the full pair set is only
-    ~20-45k pairs, cheap to score directly and exhaustive rather than a
-    random sample of it. `max_pairs` is still supported (matching
-    toy_lipschitz's interface) as a safety valve if a caller passes a
-    larger N than intended.
+    All N*(N-1)/2 pairs by default; if max_pairs is set and exceeded,
+    subsamples pairs randomly instead. At MNIST scale N is kept modest
+    (a few hundred points), so the full pair set (~20-45k) is cheap
+    enough to score exhaustively -- max_pairs is a safety valve, not the
+    default path.
 
     Returns (L_hat, i_argmax, j_argmax).
     """
@@ -68,13 +55,10 @@ def pairwise_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean
 
 
 def ratio_and_components_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
-    """Like ratio_for_pairs below, but also returns the two raw components
-    the ratio is built from: `dist` (distance_fn(x_i, x_j), the
-    denominator) and `margin_diff` (|margin_i - margin_j|, the numerator).
-    For callers that want to inspect *why* a specific pair has a high or
-    low ratio -- e.g. two points that are simply far apart in the metric
-    vs. two points whose margins genuinely diverge a lot -- not just the
-    combined number. Returns (ratio, dist, margin_diff), each shape (len(ii),).
+    """|margin_i - margin_j| / distance_fn(x_i, x_j) for the given pairs, 
+    plus its two raw components (dist, margin_diff) - for inspecting why a pair scored high: 
+    far apart in the metric, vs. genuinely divergent margins. 
+    Returns (ratio, dist, margin_diff), each shape (len(ii),).
     """
     with torch.no_grad():
         margins = margin_fn(model, x_batch, y_batch)
@@ -86,15 +70,10 @@ def ratio_and_components_for_pairs(model, x_batch, y_batch, margin_fn, distance_
 
 
 def ratio_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
-    """The shared core of pairwise_lipschitz/pairwise_lipschitz_all: given
-    index tensors `ii`/`jj` into x_batch/y_batch -- any pairing scheme, not
-    just all-i<j (e.g. a random subsample, or nearest-neighbor pairs from
-    an external index) -- returns the (len(ii),) array of
-    |margin_i - margin_j| / distance_fn(x_i, x_j) ratios for exactly those
-    pairs. Factored out so callers that need a different pairing scheme
-    can reuse the same margin/distance/ratio computation without
-    duplicating it (see pairwise_lipschitz_all below, and
-    run_experiment.py's nearest-neighbor ratio check).
+    """Same as ratio_and_components_for_pairs, ratio only. 
+    Shared core of pairwise_lipschitz/pairwise_lipschitz_all - takes any ii/jj pairing (not just all-i<j), 
+    so callers with a different pairing scheme (a subsample, or external nearest-neighbor pairs) reuse this instead of
+    recomputing margins/distances themselves.
     """
     ratio, _, _ = ratio_and_components_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj)
     return ratio
@@ -102,17 +81,11 @@ def ratio_for_pairs(model, x_batch, y_batch, margin_fn, distance_fn, ii, jj):
 
 def pairwise_lipschitz_all(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,
                             max_pairs=None, seed=None):
-    """Same computation pairwise_lipschitz does internally (margins,
-    pairwise distances, ratios over all i<j pairs, with the same
-    max_pairs subsampling fallback), but returns the full (num_pairs,)
-    ratio array and its index arrays instead of collapsing to the max --
-    needed to look at the ratio *distribution* (a histogram, or picking
-    out specific high-ratio pairs to inspect as images), not just its
-    extreme value.
+    """Same as pairwise_lipschitz, but returns the full (num_pairs,) ratio array and its ii/jj indices instead 
+    of collapsing to the max - needed for the ratio distribution (histogram, or picking out specific high-ratio pairs), 
+    not just its extreme value.
 
-    Returns (ratio, ii, jj): ratio is (num_pairs,), ii/jj are the row/col
-    index tensors into x_batch/y_batch such that ratio[k] is the ratio for
-    the pair (x_batch[ii[k]], x_batch[jj[k]]).
+    Returns (ratio, ii, jj): ratio[k] is the ratio for (x_batch[ii[k]], x_batch[jj[k]]).
     """
     N = x_batch.shape[0]
     total_pairs = N * (N - 1) // 2
@@ -136,21 +109,13 @@ def pairwise_lipschitz_all(model, x_batch, y_batch, margin_fn, distance_fn=eucli
 
 def local_perturbation_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn=euclidean_distance_fn,
                                   radius=1.0, n_directions=40, seed=None):
-    """Finite-difference local estimate, per point in x_batch: sample
-    `n_directions` random unit vectors in raw 784-d pixel space, scale to
-    length `radius`, perturb x -> x+delta (label held fixed at the
-    original true class y, since this measures how fast the *true-class*
-    margin degrades under a small push), and take
-    max_direction |margin(x)-margin(x+delta)| / distance_fn(x, x+delta).
+    """Finite-difference local estimate per point: sample n_directions random unit vectors in raw pixel space, scale to `radius`, 
+    perturb x -> x+delta (true label held fixed), take max_direction |margin(x)-margin(x+delta)| / distance_fn(x, x+delta).
 
-    Directions are always sampled in raw pixel space regardless of the
-    distance metric in use -- only distance_fn (the denominator) changes
-    between Euclidean and Mahalanobis; the sampling distribution does not
-    (this is deliberate, see README's Design decisions section).
+    Perturbation directions are always sampled in raw pixel space regardless of distance_fn - only the denominator changes 
+    between Euclidean and Mahalanobis, not the sampling itself.
 
-    Returns the full (N,) array of per-point local estimates, not just the
-    overall max -- needed for the submethod-agreement plot and consistent
-    with toy_lipschitz's `_grid` convention.
+    Returns the full (N,) array of per-point estimates, not just the max.
     """
     generator = _generator(seed)
     N, d = x_batch.shape
@@ -179,23 +144,14 @@ def local_perturbation_lipschitz(model, x_batch, y_batch, margin_fn, distance_fn
 
 
 def gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=None):
-    """Autograd-based LOCAL/infinitesimal estimate, per point: the dual norm
-    of grad(margin_fn) w.r.t. x, under the metric in use.
+    """Autograd exact/infinitesimal estimate per point: the dual norm of
+    grad(margin_fn) wrt x.
 
-    Plain Euclidean (precision=None): ||grad||_2.
+    Euclidean (precision=None): ||grad||_2.
+    Mahalanobis (precision=P=Sigma^-1): sqrt(grad^T Sigma grad) - note this uses Sigma = P^-1, not P itself; 
+    inverted back here for interface consistency with pairwise_lipschitz/local_perturbation_lipschitz, which take `precision` directly. 
 
-    Mahalanobis with precision matrix P (P = Sigma^{-1}, the same P used
-    directly as the quadratic form in distance_fn's Mahalanobis distance):
-    the correct dual-norm expression is sqrt(grad^T P^{-1} grad) =
-    sqrt(grad^T Sigma grad) -- note this uses Sigma = P^{-1}, NOT P itself;
-    inverting P a second time here (rather than reusing Sigma from
-    distance.py directly) is deliberate for interface consistency (every
-    estimator here takes `precision`, matching pairwise_lipschitz's and
-    local_perturbation_lipschitz's Mahalanobis argument), and is cheap: a
-    784x784 dense inverse takes ~10ms, negligible next to model
-    training/evaluation.
-
-    Returns the full (N,) array of per-point gradient-norm estimates.
+    Returns the full (N,) array of per-point estimates.
     """
     x = x_batch.clone().requires_grad_(True)
     margins = margin_fn(model, x, y_batch)

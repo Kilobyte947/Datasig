@@ -1,18 +1,11 @@
-"""Driver: train the three classifiers, run the three Lipschitz estimators
-under Euclidean distance, select a ridge epsilon for the Mahalanobis
-distance, then re-run the three estimators under that distance. Saves
-results to results/. All reusable logic lives in the sibling modules --
-this file only wires them together, matching toy_lipschitz's convention.
-"""
+"""This file contains the main driver for the MNIST Lipschitz experiment, including the ratio-distribution analysis (Steps 2b/4b)."""
 
 import json
 import os
 from pathlib import Path
-
 import numpy as np
 import torch
 from sklearn.neighbors import NearestNeighbors
-
 from mnist_lipschitz.data import load_mnist, get_dev_subset, make_loader, stratified_subset_idx
 from mnist_lipschitz.models import (
     LogisticRegressionModel, SmallMLP, SmallCNN, FlattenedInputWrapper,
@@ -28,60 +21,35 @@ from mnist_lipschitz.estimators import (
 )
 from mnist_lipschitz.distance import (
     pixel_covariance, ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
+    sweep_epsilon,
 )
+from mnist_lipschitz.plots import MODEL_ORDER
 
 torch.set_default_dtype(torch.float64)
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 SEED = 0
 
-
 # ---------------------------------------------------------------------------
-# Epsilon selection (Checkpoint 5)
+# Epsilon selection
 # ---------------------------------------------------------------------------
-
-def sweep_epsilon(Sigma, epsilon_values):
-    """Condition number of Sigma + epsilon*I for each candidate epsilon.
-    Returns a list of floats aligned with epsilon_values."""
-    d = Sigma.shape[0]
-    identity = torch.eye(d)
-    return [torch.linalg.cond(Sigma + eps * identity).item() for eps in epsilon_values]
-
 
 def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subsample_frac=0.8,
                              n_points=100, seed=SEED, verbose=True):
-    """For each epsilon: draw `n_subsamples` independent random subsamples
-    of `dataset` (subsample_frac of it each), fit Sigma on each subsample,
-    compute the MEAN Mahalanobis gradient-norm estimate (using `model`'s
-    margin_fn) over `n_points` points from that same subsample under the
-    resulting ridge precision, and report the spread (coefficient of
-    variation = std/mean) of that mean across repeats.
+    """No-ground-truth substitute for validating against a true L*: for each
+    epsilon, draw independent random subsamples of `dataset`, fit Sigma on
+    each, and compute the mean Mahalanobis gradient-norm estimate. Reports
+    the coefficient of variation (std/mean) across subsamples -- a stable
+    epsilon reproduces its estimate across resamples; an unstable one is
+    fitting noise in that subsample's covariance.
 
-    This is the no-ground-truth substitute for Experiment 1's
-    accuracy-vs-L* sweep: MNIST has no closed-form L* to check against, so
-    instead we check whether the ESTIMATE reproduces across independent
-    resamples of the same underlying distribution. An epsilon whose
-    estimate swings wildly between resamples is fitting noise in that
-    particular subsample's covariance -- the high-dimensional analogue of
-    Experiment 1's degree-5/6 condition-number blowup.
+    Uses the MEAN gradient-norm estimate, not pairwise_lipschitz's max:
+    empirically, max-based estimates are dominated by extreme-value sampling
+    noise (cv 0.04-0.26, no clean trend) while the mean gives a clean,
+    interpretable trend (cv 0.01-0.04).
 
-    Uses the mean gradient-norm estimate, not pairwise_lipschitz's max,
-    deliberately: a max over a modest number of points/pairs is an
-    extreme-value statistic, dominated by whichever single pair happens to
-    be sampled near the current metric's steepest direction -- that adds a
-    lot of irreducible sampling noise on top of (and easily swamping) the
-    genuine metric-shape instability epsilon is meant to control, which
-    was confirmed empirically (pairwise-max gave cv in the 0.04-0.26 range
-    with no clean trend; the mean gradient-norm gives cv in the 0.01-0.04
-    range with a clear decreasing-then-flat trend). See README's Design
-    decisions section.
-
-    Uses `model`'s margin_fn as the fixed scalar function throughout (in
-    practice, the already-trained logistic regression model -- cheapest to
-    evaluate, and epsilon selection only needs *a* consistent yardstick,
-    not the final model being analyzed). Unlike Experiment 1's strict
-    "no model involved" L_hat_data, there is no model-free scalar function
-    of x on MNIST to fall back on.
+    Uses a fixed reference model's margin_fn throughout, since epsilon
+    selection only needs a consistent yardstick, not the final model.
     """
     generator = torch.Generator().manual_seed(seed)
     N = len(dataset)
@@ -113,11 +81,9 @@ def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subs
 
 
 def select_epsilon(epsilon_values, cond_numbers, cv_values, max_cond=1e4, max_cv=0.15, verbose=True):
-    """Pick the smallest epsilon (least regularization, closest to the "true"
-    Mahalanobis distance) whose condition number and subsample
-    coefficient-of-variation both fall within the given bounds. Falls back
-    to the epsilon with the lowest cv (with an explicit warning) if none
-    qualify -- never silently returns a value outside the stated criteria."""
+    """Smallest epsilon meeting both a condition-number and a
+    stability (cv) bound. Falls back to the lowest-cv epsilon, with a
+    warning, if none qualify."""
     candidates = [eps for eps, cond, cv in zip(epsilon_values, cond_numbers, cv_values)
                   if cond <= max_cond and cv <= max_cv]
     if candidates:
@@ -133,15 +99,12 @@ def select_epsilon(epsilon_values, cond_numbers, cv_values, max_cond=1e4, max_cv
               f"falling back to epsilon={chosen:g} (lowest cv={cv_values[best_idx]:.4f})")
     return chosen
 
-
 # ---------------------------------------------------------------------------
-# Checkpoint 6: main comparison
+# Main comparison
 # ---------------------------------------------------------------------------
-
-MODEL_NAMES = ("logistic_regression", "mlp", "cnn")
-
 
 def _build_models_and_data(seed):
+    """Loads train/test MNIST and wraps each in flat and image-shaped loaders."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
 
@@ -152,16 +115,12 @@ def _build_models_and_data(seed):
 
     return train, test, train_flat, test_flat, train_img, test_img
 
-
 def _run_estimators_for_model(model, x_query, y_query, distance_fn, precision=None,
                                local_radius=1.0, n_directions=20, seed=SEED):
-    """Runs all three sub-methods for one model under one distance metric.
-    `model` must already accept flat (N, 784) input (wrap the CNN with
-    FlattenedInputWrapper first). Includes `i_pair`/`j_pair` (the indices
-    into x_query/y_query of pairwise_lipschitz's argmax pair) in the
-    returned dict, not just the scalar `pairwise` value, so a caller can
-    look at *which* two points produced it (e.g. via
-    plots.plot_image_pairs) rather than only the number."""
+    """Runs all three Lipschitz sub-methods for one model under one distance
+    metric. `model` must accept flat (N, 784) input. Returns scalar
+    summaries plus i_pair/j_pair (the argmax pair's indices) and the full
+    per-point local/gradient arrays."""
     L_pairwise, i_pair, j_pair = pairwise_lipschitz(model, x_query, y_query, margin_fn, distance_fn)
 
     local_vals = local_perturbation_lipschitz(model, x_query, y_query, margin_fn, distance_fn,
@@ -181,47 +140,33 @@ def _run_estimators_for_model(model, x_query, y_query, distance_fn, precision=No
     }
 
 
+
 # ---------------------------------------------------------------------------
-# Checkpoint 7 (in progress): ratio distribution, all pairs vs. nearest neighbors
+# Step 2b/4b: ratio distribution, all pairs vs. nearest neighbors
 # ---------------------------------------------------------------------------
 
 def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_pool, distance_fn,
                                      exclude_idx=None, n_points=1000, k_neighbors=5,
                                      max_pairs=None, top_k_images=6, seed=SEED, verbose=True):
     """Compares the full pairwise ratio distribution against ratios
-    restricted to actual nearest-neighbor pairs in raw pixel space, on a
-    stratified-by-class subset of `n_points` drawn from `x_pool`/`y_pool`
-    (disjoint from `exclude_idx`, e.g. run_mnist_experiment's `query_idx`).
+    restricted to nearest-neighbor pairs in raw pixel space, on a
+    stratified-by-class subset (disjoint from `exclude_idx`).
 
-    Deliberately generic over `model`/`distance_fn` (matching
-    pairwise_lipschitz's own interface) so the same function can be called
-    again for a different model or distance_fn without new code -- only
-    `model_name`/`metric_name` need to change (they're only used to label
-    the returned arrays), not the logic. run_mnist_experiment's Step 2b
-    calls this once per model under Euclidean distance; the Mahalanobis
-    distance_fn is a planned follow-up using the same loop.
+    Nearest neighbors are found in raw pixel space regardless of
+    `distance_fn`, so the comparison isolates one question: do pairs a
+    human would call visually similar show different ratios than the
+    general pair population? The ratio itself always uses margin_fn/
+    distance_fn, never raw pixel distance -- only pair *selection* uses
+    raw pixels.
 
-    Nearest neighbors are found via sklearn's NearestNeighbors on RAW
-    pixel space specifically -- that's "which points count as
-    near-neighbors" defined independently of whatever distance_fn is
-    under test, so the comparison answers: does a metric-consistent
-    ratio, computed only on pairs a human would call visually similar,
-    look different from the ratio computed over ALL pairs (most of which
-    are visually unrelated digits)? The ratio itself is always computed
-    via margin_fn/distance_fn (through `ratio_for_pairs`), never raw pixel
-    distance -- only *which* pairs get selected uses raw pixel space.
+    Generic over model/distance_fn, so the same call covers any
+    model/metric combination without new code.
 
-    No plotting here (matches this file's convention: run_experiment.py
-    never calls plots.py itself, the notebook does) -- `top_near_neighbor_pairs`
-    is pre-assembled into the exact tuple shape plots.plot_image_pairs
-    expects, so a caller can pass it straight through.
-
-    Returns a dict of tensors/arrays (ratios, pair indices, the subset
-    itself and its predictions, `top_near_neighbor_pairs`, a `summary` of
-    scalars, and `arrays` -- the same data as plain numpy arrays keyed by
-    `{metric_name}_{model_name}_...`, ready to merge into a caller's
-    saved-results dict).
+    Returns dicts of tensors/arrays: ratios, pair indices, the subset and
+    its predictions, top_near_neighbor_pairs, a scalar `summary`, and
+    `arrays` (numpy, prefixed `{metric_name}_{model_name}_...` for saving).
     """
+
     subset_idx = stratified_subset_idx(y_pool, n_points, seed=seed, exclude_idx=exclude_idx)
     x_subset = x_pool[subset_idx]
     y_subset = y_pool[subset_idx]
@@ -232,17 +177,8 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
     all_pairs_ratio, all_ii, all_jj = pairwise_lipschitz_all(
         model, x_subset, y_subset, margin_fn, distance_fn, max_pairs=max_pairs, seed=seed)
 
-    # Raw pixel space on purpose -- see docstring. +1 neighbor since each
-    # point is trivially its own nearest neighbor; dropped via [:, 1:].
-    #
-    # sklearn's threaded kneighbors query segfaults in-process alongside
-    # torch on at least one dev machine (macOS; conflicting OpenMP
-    # runtimes) -- confirmed directly with a minimal repro (bare
-    # NearestNeighbors().kneighbors() call after `import torch`), not
-    # assumed. Forcing single-threaded OpenMP for the duration of this
-    # call only avoids it; restored immediately after (best-effort --
-    # OpenMP may cache the thread count at first use, so this may not
-    # perfectly undo any process-wide effect, but it doesn't hurt to try).
+    # sklearn's threaded kneighbors query can segfault alongside torch
+    # (conflicting OpenMP runtimes) -- force single-threaded for this call only.
     _prev_omp_threads = os.environ.get("OMP_NUM_THREADS")
     os.environ["OMP_NUM_THREADS"] = "1"
     try:
@@ -261,12 +197,8 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
     near_ratio, near_dist, near_margin_diff = ratio_and_components_for_pairs(
         model, x_subset, y_subset, margin_fn, distance_fn, near_ii, near_jj)
 
-    # Deduplicated by canonical (min(i,j), max(i,j)): mutual nearest
-    # neighbors produce both (i,j) and (j,i) in near_ii/near_jj with the
-    # identical (symmetric) ratio, so without this a single pair of
-    # points could occupy two of the top_k_images slots as a mirrored
-    # duplicate -- confirmed this actually happens on real MNIST output,
-    # not just a theoretical concern.
+    # Dedup by canonical (min(i,j), max(i,j)) -- mutual nearest neighbors
+    # otherwise appear twice as a mirrored duplicate.
     sorted_idx = torch.argsort(near_ratio, descending=True)
     top_near_neighbor_pairs = []
     seen_canonical = set()
@@ -276,10 +208,6 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
         if canonical in seen_canonical:
             continue
         seen_canonical.add(canonical)
-        # Trailing (dist, margin_diff) fields beyond the 7 plot_image_pairs
-        # needs -- it slices to the first 7 and ignores the rest, so this
-        # stays compatible with every other caller that builds plain
-        # 7-tuples (e.g. run_mnist_experiment's argmax_pair_lr_euclidean).
         top_near_neighbor_pairs.append((
             x_subset[i].numpy(), x_subset[j].numpy(),
             y_subset[i].item(), preds_subset[i].item(),
@@ -332,21 +260,20 @@ def run_mnist_experiment(
     n_ratio_points=1000, k_neighbors=5,
     seed=SEED, verbose=True,
 ):
-    """The main driver, in named steps:
-    1. Train logistic regression, MLP, and CNN on full MNIST.
-    2. Run all three Lipschitz estimators (Euclidean distance) on all three models.
-    2b. Ratio-distribution analysis (Checkpoint 7), Euclidean distance, all
-        three models.
-    3. Compute full-training-set pixel covariance, sweep epsilon, select one.
-    4. Re-run all three estimators (Mahalanobis distance, selected epsilon) on all three models.
-    4b. Ratio-distribution analysis again, Mahalanobis distance (reusing the
-        epsilon/precision from Step 3/4, not re-selected), all three models.
-    5. Save everything to results/.
+    """Full pipeline:
+    1. Train all three models (logistic regression, small MLP, small CNN) on MNIST.
+    2. Run all three Lipschitz sub-methods (pairwise, local-perturbation, gradient-norm) on all three models under Euclidean distance.
+    2b. Ratio-distribution analysis under Euclidean distance (all pairs vs. nearest neighbors).
+    3. Pixel covariance + epsilon sweep/selection.
+    4. Run all three Lipschitz sub-methods on all three models under Mahalanobis distance.
+    4b. Ratio-distribution analysis under Mahalanobis distance (all pairs vs. nearest neighbors).
+    5. Save results to results/.
     """
+
     torch.manual_seed(seed)
     train, test, train_flat, test_flat, train_img, test_img = _build_models_and_data(seed)
 
-    # --- Step 1: train all three models ---
+    # Step 1: train all three models, record train/test accuracies
     if verbose:
         print("=== Step 1: training models ===")
     lr_model, lr_train_acc, lr_test_acc = train_classifier(
@@ -368,17 +295,18 @@ def run_mnist_experiment(
 
     models = {"logistic_regression": lr_model, "mlp": mlp_model, "cnn": cnn_model}
 
-    # Fixed set of held-out (test-set) query points, same points/labels for every model/metric.
+    # Fixed held-out query set, shared across every model/metric.
     generator = torch.Generator().manual_seed(seed)
     query_idx = torch.randperm(len(test), generator=generator)[:n_lipschitz_points]
     x_query = test.x_flat[query_idx]
     y_query = test.y[query_idx]
 
-    # --- Step 2: Euclidean estimators on all three models ---
+    # Step 2: Euclidean-distance estimators on all three models
     if verbose:
         print("\n=== Step 2: Euclidean-distance estimators ===")
     euclidean_results = {}
-    for name, model in models.items():
+    for name in MODEL_ORDER:
+        model = models[name]
         euclidean_results[name] = _run_estimators_for_model(
             model, x_query, y_query, euclidean_distance_fn,
             local_radius=local_radius, n_directions=n_directions, seed=seed)
@@ -387,24 +315,17 @@ def run_mnist_experiment(
             print(f"  {name}: pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
                   f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}")
 
-    # --- Step 2b: ratio-distribution analysis (Checkpoint 7) ---
-    # Euclidean distance, all three models -- run_ratio_distribution_analysis
-    # takes model/distance_fn as parameters (see its docstring), so this is
-    # the same call repeated per model, matching Step 2's models.items()
-    # loop; the Mahalanobis distance_fn is the same pattern again (Phase 2).
+    # Step 2b: Euclidean ratio-distribution analysis
     if verbose:
-        print("\n=== Step 2b: ratio-distribution analysis (Euclidean, all models) ===")
+        print("\n=== Step 2b: Euclidean ratio-distribution analysis ===")
     ratio_dist_euclidean_results = {}
-    for name, model in models.items():
+    for name in MODEL_ORDER:
+        model = models[name]
         ratio_dist_euclidean_results[name] = run_ratio_distribution_analysis(
             model, name, "euclidean", test.x_flat, test.y, euclidean_distance_fn,
             exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
 
-    # The pairwise-argmax pair from Step 2's logistic-regression/Euclidean
-    # result, pre-assembled into the same tuple shape plot_image_pairs
-    # expects (see plots.py) -- a single-pair list rather than the 6-pair
-    # list run_ratio_distribution_analysis returns, since this is one
-    # specific, already-identified pair, not a top-k selection.
+    # Logistic-regression/Euclidean argmax pair, pre-assembled for plot_image_pairs.
     lr_euclidean = euclidean_results["logistic_regression"]
     i_pair, j_pair = lr_euclidean["i_pair"], lr_euclidean["j_pair"]
     with torch.no_grad():
@@ -416,9 +337,9 @@ def run_mnist_experiment(
         lr_euclidean["pairwise"],
     )]
 
-    # --- Step 3: pixel covariance + epsilon sweep/selection ---
+    # Step 3: epsilon selection (pixel covariance + ridge regularization)
     if verbose:
-        print("\n=== Step 3: epsilon selection ===")
+        print("\n === Step 3: epsilon selection (pixel covariance + ridge regularization) ===")
     Sigma = pixel_covariance(train.x_flat)
     eigenvalues = covariance_eigenvalues(Sigma)
     cond_numbers = sweep_epsilon(Sigma, list(epsilon_values))
@@ -432,11 +353,12 @@ def run_mnist_experiment(
     precision = ridge_precision(Sigma, selected_epsilon)
     mahalanobis_distance_fn = make_mahalanobis_distance_fn(precision)
 
-    # --- Step 4: Mahalanobis estimators on all three models ---
+    # Step 4: Mahalanobis-distance estimators on all three models
     if verbose:
         print(f"\n=== Step 4: Mahalanobis-distance estimators (epsilon={selected_epsilon:g}) ===")
     mahalanobis_results = {}
-    for name, model in models.items():
+    for name in MODEL_ORDER:
+        model = models[name]
         mahalanobis_results[name] = _run_estimators_for_model(
             model, x_query, y_query, mahalanobis_distance_fn, precision=precision,
             local_radius=local_radius, n_directions=n_directions, seed=seed)
@@ -445,20 +367,17 @@ def run_mnist_experiment(
             print(f"  {name}: pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
                   f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}")
 
-    # --- Step 4b: ratio-distribution analysis (Checkpoint 7, Mahalanobis) ---
-    # Same three models, same stratified subset construction (same seed ->
-    # same query_idx/exclude_idx and same stratified_subset_idx draw as
-    # Step 2b), only the distance_fn changes -- reuses the epsilon/precision
-    # already selected in Step 3, does not re-run epsilon selection.
+    # Step 4b: Mahalanobis ratio-distribution analysis (reuses selected epsilon)
     if verbose:
-        print(f"\n=== Step 4b: ratio-distribution analysis (Mahalanobis, epsilon={selected_epsilon:g}, all models) ===")
+        print(f"\n=== Step 4b: Mahalanobis ratio-distribution analysis (epsilon={selected_epsilon:g}, all models) ===")
     ratio_dist_mahalanobis_results = {}
-    for name, model in models.items():
+    for name in MODEL_ORDER:
+        model = models[name]
         ratio_dist_mahalanobis_results[name] = run_ratio_distribution_analysis(
             model, name, "mahalanobis", test.x_flat, test.y, mahalanobis_distance_fn,
             exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
 
-    # --- Step 5: save results ---
+    # Step 5: save results
     RESULTS_DIR.mkdir(exist_ok=True)
 
     summary = {
@@ -524,7 +443,6 @@ def run_mnist_experiment(
 
 def main():
     run_mnist_experiment()
-
 
 if __name__ == "__main__":
     main()

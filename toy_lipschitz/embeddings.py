@@ -2,6 +2,8 @@
 optionally with f(x) appended) and derive a Mahalanobis-style distance from the empirical covariance of the embedded points.
 
 Put together:x → embed → compute covariance of embedded points → invert → use as the weighting matrix for distance
+
+Also holds the distance formula itself (_mahalanobis_dist), not just the pieces that build its inputs.
 """
 
 import torch
@@ -50,11 +52,24 @@ def empirical_covariance(z, eps=1e-8):
 
 def precision_from_covariance(cov):
     """Inverse of a covariance matrix: Sigma^-1.
-    Used as the quadratic-form matrix for Mahalanobis distance, d(a,b)^2 = (a-b)^T Sigma^-1 (a-b), 
+    Used as the quadratic-form matrix for Mahalanobis distance, d(a,b)^2 = (a-b)^T Sigma^-1 (a-b),
     which reweights each direction in proportion to how little the data varies along it.
 
     Covariance tells you "how much do things vary in this direction".
-    Its inverse tells you "how much should a fixed amount of movement in this direction count," 
+    Its inverse tells you "how much should a fixed amount of movement in this direction count,"
     which is smaller in directions where there's naturally lots of spread, and larger in directions where there's naturally very little spread.
     """
     return torch.linalg.inv(cov)
+
+
+def _mahalanobis_dist(diff, precision):
+    """Weighted distance in embedded feature space: reweights each direction by `precision` (inverse covariance) instead of treating all
+    directions equally like plain Euclidean distance -- movement in directions the data naturally varies a lot counts for less than
+    movement in directions it barely varies at all. Reduces to plain Euclidean distance if `precision` is the identity matrix.
+
+    diff: (..., k) embedded-space differences (not raw x).
+    precision: (k, k), typically an inverse covariance.
+    Returns sqrt(diff^T @ precision @ diff), clamped at 0 first (guards against floating-point rounding pushing a near-zero value negative).
+    """
+    quad = torch.einsum("...i,ij,...j->...", diff, precision, diff)
+    return quad.clamp_min(0.0).sqrt()

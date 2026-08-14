@@ -1,28 +1,18 @@
-"""The three classifiers under study, their training loop, and the margin
-function the Lipschitz estimators are actually applied to.
-"""
+""" This file defines the three classifiers under study (logistic regression, small MLP, and small CNN), their training loop, and 
+the margin function the Lipschitz estimators are actually applied to."""
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-torch.set_default_dtype(torch.float64)
+torch.set_default_dtype(torch.float64) # needed everywhere to avoid silent float32->float64 upcasting and the resulting performance hit.
 
-# float64 is required throughout this project (see toy_lipschitz's convention
-# of avoiding float32 noise in true-vs-estimate comparisons), and PyTorch's
-# MPS backend does not support float64 -- so despite Apple-Silicon MPS being
-# available, this always resolves to CPU on this machine. CUDA (when present,
-# e.g. on Colab) does support float64 and will be used automatically.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 class LogisticRegressionModel(nn.Module):
-    """Single linear layer, 784 -> 10. Margin is exactly linear in x, which
-    makes this the one model with a closed-form Lipschitz constant
-    (||w_true - w_runner_up||_2 for a fixed class pair) -- see
-    estimators.py's checkpoint test.
+    """Single linear layer, 784 inputs straight to 10 output scores. 
+    No hidden layers, no nonlinearity at all.
+    Margin is exactly linear in x, which makes this the one model with a closed-form Lipschitz constant (||w_true - w_runner_up||_2 for a fixed class pair).
     """
-
     def __init__(self, input_dim=784, num_classes=10):
         super().__init__()
         self.linear = nn.Linear(input_dim, num_classes)
@@ -32,16 +22,10 @@ class LogisticRegressionModel(nn.Module):
 
 
 class SmallMLP(nn.Module):
-    """One or two hidden layers, ReLU by default.
-
-    Activation choice: toy_lipschitz used tanh throughout for continuity
-    with its smooth closed-form ground truth. There is no such ground truth
-    here, and ReLU is the standard choice for MNIST classifiers (faster to
-    train, no vanishing-gradient concern at this depth) -- so ReLU is the
-    default, with tanh still available via `activation` for anyone who wants
-    to compare. See README's Design decisions section.
+    """One or two hidden layers, ReLU by default (faster to
+    train, no vanishing-gradient concern at this depth) with tanh available via `activation` . 
+    Hidden layer sizes are configurable via `hidden_sizes`.
     """
-
     def __init__(self, input_dim=784, hidden_sizes=(128,), num_classes=10, activation="relu"):
         super().__init__()
         act_cls = {"relu": nn.ReLU, "tanh": nn.Tanh}[activation]
@@ -58,9 +42,9 @@ class SmallMLP(nn.Module):
 
 
 class SmallCNN(nn.Module):
-    """Two conv+pool blocks, then a small FC head. Deliberately small/fast --
-    this is a diagnostics project, not an accuracy benchmark."""
-
+    """Two convolutional + pooling blocks, then a small classifier head.
+    CNN needs to be handed (N, 1, 28, 28) image-shaped input instead of flat input (N, 784); 
+    FlattenedInputWrapper wraps this model to accept flat input and reshape it internally."""
     def __init__(self, num_classes=10):
         super().__init__()
         self.features = nn.Sequential(
@@ -80,17 +64,9 @@ class SmallCNN(nn.Module):
 
 
 class FlattenedInputWrapper(nn.Module):
-    """Wraps a model that expects (N, 1, 28, 28) image input (i.e. SmallCNN)
-    so it instead accepts (N, 784) flat input, reshaping internally.
-
-    estimators.py samples perturbation directions and computes distances in
-    flat 784-d pixel space uniformly across all three models -- this lets
-    the CNN be handed to those same estimator functions unchanged (same
-    contract as the logistic regression / MLP models, which are already
-    flat), rather than special-casing image-shaped input inside the
-    estimators themselves.
+    """Internally reshapes (N, 784) flat input to (N, 1, 28, 28) image input for SmallCNN which expects that shape. 
+    This lets the CNN be handed to the same Lipschitz estimator functions as the other two models, which are already flat.
     """
-
     def __init__(self, model):
         super().__init__()
         self.model = model
@@ -100,7 +76,7 @@ class FlattenedInputWrapper(nn.Module):
 
 
 def train_classifier(model, train_loader, test_loader, epochs, lr, device=DEVICE, verbose=True):
-    """Plain cross-entropy + Adam training loop. Returns (model, train_acc, test_acc)."""
+    """Train a classifier model and returns the trained model and its train/test accuracy - (model, train_acc, test_acc)""" 
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -141,11 +117,11 @@ def evaluate_accuracy(model, loader, device=DEVICE):
 def margin_fn(model, x, y_true):
     """logit[y_true] - max(logit[j] for j != y_true), per example.
 
-    This is the natural classifier analogue of a scalar regression output:
-    a single real number per input, and it's what robustness actually
-    depends on (margin crossing zero = the predicted class flips). The
-    Lipschitz estimators in estimators.py are applied to this function, not
-    to raw logits.
+    Collapses the classifier's 10 logits into the one scalar the Lipschitz estimators 
+    actually operate on - the classifier analogue of a scalar regression output. 
+    Positive and large means confidently correct; crossing zero means the predicted class flips. 
+    Robustness is exactly about how easily a small input change pushes this margin across zero,
+    which is why every estimator in estimators.py is applied to margin_fn, not to raw logits.
     """
     logits = model(x)
     true_logit = logits.gather(1, y_true.unsqueeze(1)).squeeze(1)
