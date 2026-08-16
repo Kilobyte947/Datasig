@@ -51,9 +51,19 @@ def mahalanobis_distance(x, y, precision):
     return quad.clamp_min(0.0).sqrt()
 
 
-def make_mahalanobis_distance_fn(precision):
-    """Returns a distance_fn(x, y) closure over a fixed precision matrix, for direct use as estimators.py's `distance_fn` argument."""
-    return lambda x, y: mahalanobis_distance(x, y, precision)
+def make_mahalanobis_distance_fn(precision, embed_fn=None):
+    """Returns a distance_fn(x, y) closure over a fixed precision matrix, for direct use as estimators.py's `distance_fn` argument.
+
+    If `embed_fn` is given, both x and y are mapped through it before the Mahalanobis distance is computed -- lets
+    the metric be defined over an embedded feature space (e.g. embeddings.py::elementwise_embedding) instead of
+    raw pixel space, matching toy_lipschitz's embed_fn convention for pairwise_lipschitz/local_perturbation_lipschitz.
+    `precision` must then be sized for the embedded space, not raw x (e.g. `svd_ridge_precision(embed_fn(x_flat), epsilon)`).
+
+    Leaving `embed_fn` unset (the default) leaves existing behavior exactly unchanged.
+    """
+    if embed_fn is None:
+        return lambda x, y: mahalanobis_distance(x, y, precision)
+    return lambda x, y: mahalanobis_distance(embed_fn(x), embed_fn(y), precision)
 
 
 def covariance_eigenvalues(x_flat):

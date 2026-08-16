@@ -27,8 +27,8 @@ Do not duplicate that content here; this file only covers what's common across b
 ## Environment and commands
 
 No `pyproject.toml`/`requirements.txt` — dependencies live in the committed `.venv/` (torch,
-torchvision, numpy, matplotlib, pandas, pytest, jupyter). Always invoke tools through it rather
-than a bare `python`/`pytest`:
+torchvision, numpy, scikit-learn, matplotlib, pandas, pytest, jupyter). Always invoke tools
+through it rather than a bare `python`/`pytest`:
 
 ```bash
 # run all tests for one experiment

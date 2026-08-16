@@ -17,6 +17,7 @@ from mnist_lipschitz.estimators import (
     ratio_for_pairs,
     linear_layer_lipschitz,
 )
+from mnist_lipschitz.embeddings import elementwise_embedding
 
 # --- Critical checkpoint: closed-form agreement on logistic regression ---
 #
@@ -173,6 +174,84 @@ def test_gradient_norm_estimate_mahalanobis_matches_independent_closed_form():
     margin_diff = (margin_fn(model, x1.unsqueeze(0), y_batch[:1])
                    - margin_fn(model, x0.unsqueeze(0), y_batch[:1])).abs().item()
     assert abs(margin_diff / maha_dist.item() - expected) < 1e-6
+
+
+def test_gradient_norm_estimate_embed_fn_identity_matches_raw_pixel_formula():
+    """embed_fn=<identity> must reduce exactly to the embed_fn=None formula on the same precision matrix --
+    identity has a constant Jacobian J(x)=I, so the pullback metric Q(x)=J^T@P@J collapses to P itself, matching
+    the raw-pixel formula's own sigma=inv(P) exactly. Confirms the new embed_fn path is at least consistent with
+    the pre-existing, already-checkpointed formula before trusting it on a genuinely nonlinear embedding."""
+    d = 5
+    torch.manual_seed(11)
+    model, w_diff, _ = _linear_margin_setup(d=d, seed=11)
+    x_batch = torch.randn(4, d)
+    y_batch = torch.zeros(4, dtype=torch.int64)
+
+    A = torch.randn(d, d)
+    precision = A @ A.T + d * torch.eye(d)
+
+    L_hat_raw = gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=precision)
+    L_hat_embedded = gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=precision,
+                                             embed_fn=lambda x: x)
+
+    assert torch.allclose(L_hat_raw, L_hat_embedded, atol=1e-8)
+
+
+def test_gradient_norm_estimate_embed_fn_linear_matches_direct_closed_form():
+    """For a fixed LINEAR embed_fn (embed_fn(x) = x @ A.T for a constant matrix A, so its Jacobian J(x)=A is the
+    same at every point), the pullback metric Q = A^T @ precision @ A can be computed directly without any
+    autograd -- an independent closed-form check of the jacrev/vmap-based Jacobian machinery, using an embedding
+    whose output dimension differs from its input dimension (D=8 != d=5), unlike the identity check above."""
+    d, D = 5, 8
+    torch.manual_seed(13)
+    model, w_diff, _ = _linear_margin_setup(d=d, seed=13)
+    x_batch = torch.randn(4, d)
+    y_batch = torch.zeros(4, dtype=torch.int64)
+
+    A = torch.randn(D, d)
+    B = torch.randn(D, D)
+    precision = B @ B.T + D * torch.eye(D)  # SPD, well-conditioned, sized for the embedded (D,) space
+
+    embed_fn = lambda x: x @ A.T
+    L_hat = gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=precision, embed_fn=embed_fn)
+
+    Q = A.T @ precision @ A  # closed form: constant Jacobian J(x) = A for all x
+    expected = (w_diff @ torch.linalg.solve(Q, w_diff)).clamp_min(0.0).sqrt().item()
+    assert torch.allclose(L_hat, torch.full((4,), expected), atol=1e-6)
+
+
+def test_gradient_norm_estimate_embed_fn_elementwise_matches_manual_jacobian():
+    """For embeddings.py::elementwise_embedding (the actual embed_fn used in this project's degree sweep), the
+    per-point Jacobian has a hand-derivable closed form: embed_fn(x)_k = x**(k+1) for k=0..degree-1 depends only
+    on the SAME pixel, so d(embed_fn(x)_k,i)/dx_j = (k+1)*x_i**k if i==j else 0 -- i.e. per power-block k, the
+    Jacobian is diag((k+1)*x**k). This test builds Q(x) = J(x)^T @ precision @ J(x) from that manual formula,
+    independently of gradient_norm_estimate's jacrev/vmap machinery, and checks the two agree -- the genuine
+    independent check for the *specific* embedding this project actually uses (the identity/linear checks above
+    only verify the general machinery, not this particular nonlinear Jacobian)."""
+    d, degree = 5, 3
+    D = d * degree
+    torch.manual_seed(17)
+    model, w_diff, _ = _linear_margin_setup(d=d, seed=17)
+    x_batch = torch.rand(4, d) + 0.5  # away from 0, so x**(k-1) terms are well-scaled
+    y_batch = torch.zeros(4, dtype=torch.int64)
+
+    B = torch.randn(D, D)
+    precision = B @ B.T + D * torch.eye(D)
+
+    embed_fn = lambda x: elementwise_embedding(x, degree)
+    L_hat = gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=precision, embed_fn=embed_fn)
+
+    # Manual per-point Jacobian pullback, built independently of estimators.py.
+    P_blocks = precision.reshape(degree, d, degree, d)  # [k, i, k', j] = precision[k*d+i, k'*d+j]
+    expected = torch.empty(4)
+    for n in range(4):
+        xn = x_batch[n]
+        scale = torch.stack([(k + 1) * xn ** k for k in range(degree)], dim=0)  # (degree, d)
+        Q = torch.einsum("ki,kimj,mj->ij", scale, P_blocks, scale)  # (d, d)
+        u = torch.linalg.solve(Q, w_diff)
+        expected[n] = (w_diff @ u).clamp_min(0.0).sqrt()
+
+    assert torch.allclose(L_hat, expected, atol=1e-6)
 
 
 def test_ratio_and_components_for_pairs_matches_ratio_for_pairs_and_is_self_consistent():

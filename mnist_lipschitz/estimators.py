@@ -216,7 +216,7 @@ def local_perturbation_lipschitz(model, x_batch, y_batch, output_fn, distance_fn
     return best
 
 
-def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None):
+def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None, embed_fn=None):
     """Autograd-based LOCAL/infinitesimal estimate, per point: the dual norm
     of grad(output_fn) w.r.t. x, under the metric in use.
 
@@ -224,20 +224,48 @@ def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None):
     (shape (N,), e.g. a margin function) or vector-per-example (shape
     (N, d) with d>1, e.g. `model.extractor`):
 
-    - **Scalar** (unchanged from before this generalization): a single
-      backward pass gives the exact per-example gradient (N, input_dim)
-      directly, since summing a per-example scalar over the batch doesn't
-      mix examples. Plain Euclidean (precision=None): ||grad||_2.
-      Mahalanobis with precision matrix P (P = Sigma^{-1}, the same P used
-      directly as the quadratic form in distance_fn's Mahalanobis
-      distance): the correct dual-norm expression is
-      sqrt(grad^T P^{-1} grad) = sqrt(grad^T Sigma grad) -- note this uses
-      Sigma = P^{-1}, NOT P itself; inverting P a second time here (rather
-      than reusing Sigma from distance.py directly) is deliberate for
-      interface consistency (every estimator here takes `precision`,
-      matching pairwise_lipschitz's and local_perturbation_lipschitz's
-      Mahalanobis argument), and is cheap: a 784x784 dense inverse takes
-      ~10ms, negligible next to model training/evaluation.
+    - **Scalar**: a single backward pass gives the exact per-example
+      gradient (N, input_dim) directly, since summing a per-example scalar
+      over the batch doesn't mix examples. Plain Euclidean
+      (precision=None): ||grad||_2. Mahalanobis with precision matrix P
+      (P = Sigma^{-1}, the same P used directly as the quadratic form in
+      distance_fn's Mahalanobis distance):
+
+      - `embed_fn=None` (unchanged from before this generalization): `P`
+        is sized for raw x, and the dual-norm expression is
+        sqrt(grad^T P^{-1} grad) = sqrt(grad^T Sigma grad) -- note this
+        uses Sigma = P^{-1}, NOT P itself; inverting P a second time here
+        (rather than reusing Sigma from distance.py directly) is
+        deliberate for interface consistency (every estimator here takes
+        `precision`, matching pairwise_lipschitz's and
+        local_perturbation_lipschitz's Mahalanobis argument), and is
+        cheap: a 784x784 dense inverse takes ~10ms, negligible next to
+        model training/evaluation.
+      - `embed_fn` given: `P` is sized for the *embedded* feature space
+        (`embed_fn(x).shape[-1]`), e.g.
+        `embeddings.py::elementwise_embedding`. The distance being
+        differentiated is now `||embed_fn(x) - embed_fn(y)||_P`, so the
+        correct dual norm is the *pullback* of that metric through
+        `embed_fn`: for a perturbation `dx`, `embed_fn(x+dx) - embed_fn(x)
+        ~= J(x) @ dx` (J = embed_fn's Jacobian at x), so the local metric
+        on raw x is `Q(x) = J(x)^T @ P @ J(x)` -- generally **different
+        per point** (unlike the fixed Sigma above) whenever embed_fn is
+        nonlinear, since J(x) itself depends on x. The dual norm is then
+        `sqrt(grad^T Q(x)^-1 grad)`, computed via a batched linear solve
+        rather than forming `Q(x)^-1` explicitly. `J(x)` is computed via
+        `torch.func.jacrev`/`vmap`, so this works for *any* embed_fn, not
+        just a specific structural form (e.g. elementwise powers) --
+        genuine automatic differentiation through embed_fn, not a
+        hand-derived formula specific to one embedding.
+
+        When `embed_fn` is linear (in particular the identity, degree=1
+        of `elementwise_embedding`), `J(x)` is constant across x, `Q(x)`
+        reduces to a single fixed matrix, and this reduces exactly to the
+        `embed_fn=None` formula above with `P` replaced by that fixed
+        `J^T @ P @ J` -- checked directly in
+        `tests/test_estimators.py`, not just derived and trusted (this
+        embedded metric is otherwise unverifiable at MNIST scale, with no
+        `L*` to check against).
     - **Vector** (new): the local Lipschitz constant of a vector-valued
       map is the spectral norm (largest singular value) of its Jacobian,
       not a plain gradient norm -- there is no single "gradient" to take
@@ -261,15 +289,26 @@ def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None):
 
     if outputs.dim() <= 1:
         (grad,) = torch.autograd.grad(outputs.sum(), x)
+        grad = grad.detach()
 
         if precision is None:
-            return grad.norm(p=2, dim=-1).detach()
+            return grad.norm(p=2, dim=-1)
 
-        sigma = torch.linalg.inv(precision)  # P^{-1}, i.e. Sigma itself -- see docstring
-        quad = torch.einsum("ni,ij,nj->n", grad, sigma, grad)
-        return quad.clamp_min(0.0).sqrt().detach()
+        if embed_fn is None:
+            sigma = torch.linalg.inv(precision)  # P^{-1}, i.e. Sigma itself -- see docstring
+            quad = torch.einsum("ni,ij,nj->n", grad, sigma, grad)
+            return quad.clamp_min(0.0).sqrt()
 
-    if precision is not None:
+        x_detached = x_batch.detach()
+        jacobian_fn = torch.func.jacrev(embed_fn)
+        J = torch.func.vmap(jacobian_fn)(x_detached)  # (N, D, d): D = embed_fn output dim, d = input dim
+        Q = torch.einsum("nDi,DE,nEj->nij", J, precision, J)  # (N, d, d), the per-point pullback metric
+
+        u = torch.linalg.solve(Q, grad.unsqueeze(-1)).squeeze(-1)  # Q(x)^-1 @ grad, per point
+        quad = (grad * u).sum(dim=-1)
+        return quad.clamp_min(0.0).sqrt()
+
+    if precision is not None or embed_fn is not None:
         raise NotImplementedError(
             "gradient_norm_estimate: Mahalanobis (precision != None) is not implemented "
             "for vector-valued output_fn -- see docstring.")

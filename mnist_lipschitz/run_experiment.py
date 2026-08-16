@@ -35,7 +35,7 @@ SEED = 0
 # ---------------------------------------------------------------------------
 
 def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subsample_frac=0.8,
-                             n_points=100, seed=SEED, verbose=True):
+                             n_points=100, seed=SEED, verbose=True, embed_fn=None):
     """No-ground-truth substitute for validating against a true L*: for each
     epsilon, draw independent random subsamples of `dataset`, fit Sigma on
     each, and compute the mean Mahalanobis gradient-norm estimate. Reports
@@ -50,6 +50,15 @@ def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subs
 
     Uses a fixed reference model's margin_fn throughout, since epsilon
     selection only needs a consistent yardstick, not the final model.
+
+    If `embed_fn` is given (e.g. embeddings.py::elementwise_embedding), the
+    precision matrix is fit on each subsample's *embedded* covariance
+    (`svd_ridge_precision(embed_fn(x_sub), eps)`) instead of the raw pixel
+    covariance, and `gradient_norm_estimate`'s embed_fn-aware pullback-metric
+    path (see its docstring) supplies the correctly-dimensioned dual norm --
+    this is what makes epsilon selection meaningful for an embedded space at
+    all, rather than raising a shape mismatch. Leaving `embed_fn` unset (the
+    default) leaves existing behavior exactly unchanged.
     """
     generator = torch.Generator().manual_seed(seed)
     N = len(dataset)
@@ -62,10 +71,12 @@ def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subs
             idx = torch.randperm(N, generator=generator)[:n_sub]
             x_sub, y_sub = dataset.x_flat[idx], dataset.y[idx]
 
-            precision = svd_ridge_precision(x_sub, eps)
+            x_for_cov = embed_fn(x_sub) if embed_fn is not None else x_sub
+            precision = svd_ridge_precision(x_for_cov, eps)
 
             pt_idx = torch.randperm(x_sub.shape[0], generator=generator)[:n_points]
-            vals = gradient_norm_estimate(model, x_sub[pt_idx], y_sub[pt_idx], margin_fn, precision=precision)
+            vals = gradient_norm_estimate(model, x_sub[pt_idx], y_sub[pt_idx], margin_fn,
+                                           precision=precision, embed_fn=embed_fn)
             L_hats.append(vals.mean().item())
 
         L_hats_t = torch.tensor(L_hats)
