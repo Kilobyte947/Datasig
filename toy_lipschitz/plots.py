@@ -1,12 +1,6 @@
-"""All plotting functions for the toy Lipschitz experiment.
-
-Every function returns the created `matplotlib.figure.Figure` and optionally
-saves it to `save_path`. No plotting logic should live anywhere else
-(driver scripts/notebooks only call into this module).
-"""
+"""This file contains all plotting functions for the toy Lipschitz experiment."""
 
 import matplotlib.pyplot as plt
-
 
 def _maybe_save(fig, save_path):
     if save_path is not None:

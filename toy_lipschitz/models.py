@@ -1,4 +1,4 @@
-"""Trainable regressors for the toy Lipschitz experiment."""
+"""This file defines trainable regressors for the toy Lipschitz experiment."""
 
 import torch
 import torch.nn as nn
@@ -7,10 +7,9 @@ torch.set_default_dtype(torch.float64)
 
 _ACTIVATIONS = {"tanh": nn.Tanh, "relu": nn.ReLU}
 
-
 class TinyMLP(nn.Module):
-    """Configurable depth/width MLP regressor, d -> hidden -> ... -> 1."""
-
+    """A simple feedforward MLP with a configurable number of hidden layers and units, and a choice of activation function. 
+    The output layer is linear (no activation). The final output is squeezed to shape (N,) for N input points."""
     def __init__(self, input_dim, hidden_sizes=(64, 64), activation="tanh"):
         super().__init__()
         if activation not in _ACTIVATIONS:
@@ -30,9 +29,8 @@ class TinyMLP(nn.Module):
 
 
 class SingleTanhUnit(nn.Module):
-    """f(x) = A * tanh(w^T x + b), A/w/b as learnable params. Matches the
-    Tier A functional form exactly — used only for the Tier A sanity check.
-    """
+    """"A model that's architecturally forced to have exact shape as the Tier A's ground truth : f(x) = A * tanh(w^T x + b), A/w/b as learnable params. 
+    Used only for tier A sanity check."""""
 
     def __init__(self, input_dim):
         super().__init__()
@@ -46,15 +44,8 @@ class SingleTanhUnit(nn.Module):
 
 
 def train_regressor(model, x_train, y_train, epochs, lr, weight_decay=0.0, batch_size=None, seed=None):
-    """Plain MSE training loop, returns trained model + loss history.
-
-    `seed`, if given, is applied here -- after `model` was already
-    constructed by the caller. It only seeds whatever randomness happens
-    during this call (there currently is none: the loop below is
-    deterministic full-batch gradient descent). It does NOT seed the
-    model's weight initialization. Callers that want reproducible
-    initialization must call `torch.manual_seed` themselves before
-    constructing the model (see the call sites in run_experiment.py)."""
+    """ Plain gradient descent training (Adam optimizer, mean-squared-error loss).
+    Note: `seed` argument only controls the randomness during training (e.g. shuffling for mini-batches) and not how model's weights are randomly initialized."""
     if seed is not None:
         torch.manual_seed(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)

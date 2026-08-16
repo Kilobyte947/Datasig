@@ -1,9 +1,6 @@
-"""All plotting functions for the MNIST Lipschitz experiment.
-
-Every function returns the created `matplotlib.figure.Figure` and optionally
-saves it to `save_path`. No plotting logic should live anywhere else
-(driver scripts/notebooks only call into this module) -- matches
-toy_lipschitz/plots.py's convention.
+"""All plotting functions for the MNIST Lipschitz experiment. 
+Every function returns the created `matplotlib.figure.Figure` and optionally saves it to `save_path`. 
+No plotting logic should live anywhere else -- matches toy_lipschitz/plots.py's convention.
 """
 
 import matplotlib.pyplot as plt
@@ -12,19 +9,14 @@ import numpy as np
 MODEL_ORDER = ("logistic_regression", "mlp", "cnn")
 MODEL_LABELS = {"logistic_regression": "Logistic\nRegression", "mlp": "MLP", "cnn": "CNN"}
 
-
 def _maybe_save(fig, save_path):
     if save_path is not None:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
 
 def plot_euclidean_vs_mahalanobis(euclidean_results, mahalanobis_results, save_path=None):
-    """Three models x three sub-methods x two metrics (Euclidean,
-    Mahalanobis) -- the MNIST analogue of Experiment 1's headline
-    plain-vs-Mahalanobis comparison. One panel per sub-method (pairwise,
-    local-perturbation max, gradient-norm max), since the three sub-methods
-    live on very different natural scales.
-    """
+    """Three models x three sub-methods x two metrics (Euclidean, Mahalanobis)"""
+
     submethods = [("pairwise", "Pairwise"), ("local_max", "Local-perturbation (max)"), ("grad_max", "Gradient-norm (max)")]
     models = [m for m in MODEL_ORDER if m in euclidean_results]
 
@@ -52,9 +44,7 @@ def plot_euclidean_vs_mahalanobis(euclidean_results, mahalanobis_results, save_p
 
 
 def plot_epsilon_sweep(epsilon_values, cond_numbers, cv_values, selected_epsilon=None, save_path=None):
-    """Condition number and subsample instability (coefficient of
-    variation) both plotted against epsilon (log scale) -- the MNIST
-    analogue of toy_lipschitz's plot_degree_sweep."""
+    """Condition number and subsample instability (coefficient of variation) both plotted against epsilon (log scale)"""
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.plot(epsilon_values, cond_numbers, marker="o", color="tab:blue", label="cond(Sigma + eps*I)")
     ax.set_xscale("log")
@@ -81,10 +71,9 @@ def plot_epsilon_sweep(epsilon_values, cond_numbers, cv_values, selected_epsilon
 
 
 def plot_submethod_agreement(results, metric_name, save_path=None):
-    """For each model, show the three sub-method estimates (pairwise,
-    local-perturbation max, gradient-norm max) side by side on a log y-axis
-    (the three live on very different natural scales) -- the validity check
-    made visible, given there's no L* to plot as a reference line here."""
+    """For each model, show the three sub-method estimates side by side on a log y-axis (the three live on very different natural scales).
+    The validity check made visible, given there's no L* to plot as a reference line here."""
+
     models = [m for m in MODEL_ORDER if m in results]
     submethod_keys = ["pairwise", "local_max", "grad_max"]
     submethod_labels = ["pairwise", "local-pert.", "grad-norm"]
@@ -109,14 +98,10 @@ def plot_submethod_agreement(results, metric_name, save_path=None):
 
 
 def plot_covariance_eigenvalues(eigenvalues, epsilon=None, save_path=None):
-    """Sorted eigenvalue spectrum (descending) of the pixel covariance
-    matrix Sigma used to build the Mahalanobis distance, log-scale y-axis
-    (the spectrum spans many orders of magnitude, down to numerically ~0
-    for MNIST's constant-zero border pixels). If `epsilon` is given, also
-    plots the ridge-regularized spectrum `eigenvalues + epsilon` (same
-    eigenvectors as Sigma, just a uniform shift) so it's directly visible
-    how much epsilon lifts the near-zero tail while barely touching the
-    large eigenvalues.
+    """Eigenvalue spectrum of the pixel covariance matrix, optionally with epsilon-regularized version overlaid.
+    If `epsilon` is given, also plots the ridge-regularized spectrum `eigenvalues + epsilon` (same eigenvectors 
+    as Sigma, just a uniform shift) so it's directly visible how much epsilon lifts the near-zero tail while 
+    barely touching the large eigenvalues.
     """
     eigenvalues = eigenvalues.detach().cpu().numpy() if hasattr(eigenvalues, "detach") else np.asarray(eigenvalues)
     eigenvalues_plot = np.clip(eigenvalues, a_min=1e-12, a_max=None)  # avoid log(0)/log(negative) from fp noise
@@ -141,21 +126,7 @@ def plot_covariance_eigenvalues(eigenvalues, epsilon=None, save_path=None):
 
 
 def plot_ratio_distribution(ratio_dist_results, metric_name="Euclidean", save_path=None):
-    """Histogram of the full pairwise ratio distribution against ratios
-    restricted to raw-pixel-space nearest-neighbor pairs, one panel per
-    model -- matching plot_submethod_agreement's one-panel-per-model
-    layout, so all three models sit on one figure and are directly
-    comparable, rather than three separate figures.
-
-    `ratio_dist_results`: dict keyed by model name, each value the dict
-    returned by run_ratio_distribution_analysis (must have
-    "all_pairs_ratio" and "near_neighbor_ratio"; tensors or arrays both
-    work, converted internally). Shows whether "visually similar" pairs
-    are typical of the overall ratio distribution or concentrate at one
-    end of it -- e.g. if near-neighbor pairs skew toward high ratios,
-    that's evidence the steepest pairs tend to be visually close digits,
-    not scattered unrelated ones.
-    """
+    """For each model, show the distribution of pairwise ratios for all pairs vs. nearest-neighbor pairs, side by side."""
     models = [m for m in MODEL_ORDER if m in ratio_dist_results]
     fig, axes = plt.subplots(1, len(models), figsize=(6 * len(models), 5), sharey=True)
     if len(models) == 1:
@@ -181,16 +152,8 @@ def plot_ratio_distribution(ratio_dist_results, metric_name="Euclidean", save_pa
 
 
 def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, mahalanobis_ratio_results, save_path=None):
-    """Three models x three ratio-distribution summary stats x two metrics
-    -- the ratio-distribution/near-neighbour analogue of
-    plot_euclidean_vs_mahalanobis, same grouped-bar-per-panel layout, so
-    the two Euclidean-vs-Mahalanobis comparisons in this notebook read as
-    one consistent visual language.
-
-    `euclidean_ratio_results`/`mahalanobis_ratio_results`: dicts keyed by
-    model name, each value the dict returned by
-    run_ratio_distribution_analysis (uses its "summary" sub-dict).
-    """
+    """Grouped bar chart comparing the three summary statistics of the pairwise ratio distribution (mean of all pairs, mean of nearest-neighbor pairs, 
+    max of nearest-neighbor pairs) for each model and each of the two distance metrics (Euclidean, Mahalanobis)."""
     stats = [("all_pairs_mean", "All-pairs mean ratio"),
              ("near_neighbor_mean", "Near-neighbor mean ratio"),
              ("near_neighbor_max", "Near-neighbor max ratio")]
@@ -220,24 +183,7 @@ def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, ma
 
 
 def plot_image_pairs(pairs, save_path=None):
-    """Given up to 6 `(image1, image2, true1, pred1, true2, pred2, ratio, ...)`
-    tuples -- each image a (784,) or (1,28,28) pixel array, true/pred int
-    class labels, ratio the pairwise Lipschitz ratio for that pair, any
-    further fields ignored (e.g. run_ratio_distribution_analysis's
-    top_near_neighbor_pairs also carries distance/margin-diff trailing
-    fields, used for the printed table in the notebook, not this plot) --
-    plots them two-per-row (image1, image2), each row's images titled
-    with their true/predicted label and the row labeled with the pair's
-    ratio. Used both for the top-ratio nearest-neighbor pairs and for a
-    single model's pairwise-argmax pair (i_pair/j_pair).
-
-    Deliberately single-model, unlike plot_ratio_distribution's
-    one-figure-per-model layout: 6 pairs x 2 images already fills a
-    figure, and cramming 3 models x 6 pairs into subplot panels would
-    make each image too small to actually look at, which defeats the
-    point of this plot. Call it once per model instead (separate
-    figures) when comparing models.
-    """
+    """Given a list of image pairs and their associated true/predicted labels and pairwise Lipschitz ratio, plot the first 6 pairs in a grid."""
     n = min(len(pairs), 6)
     fig, axes = plt.subplots(n, 2, figsize=(5, 2.5 * n))
     axes = np.atleast_2d(axes)

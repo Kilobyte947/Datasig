@@ -42,7 +42,11 @@
       "Bash(.venv/bin/python /Users/yichaowang/.claude/jobs/cc0a5393/tmp/build_layer_decomposition_notebook.py)",
       "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v -s)",
       "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(git pull *)",
+      "Bash(git checkout *)",
+      "Bash(grep -rn *)",
+      "Bash(.venv/bin/python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['mnist_lipschitz/estimators.py','mnist_lipschitz/models.py','mnist_lipschitz/plots.py','mnist_lipschitz/layer_decomposition.py','mnist_lipschitz/data.py','mnist_lipschitz/distance.py','mnist_lipschitz/run_experiment.py']]; print\\('syntax ok'\\)\")"
     ]
   }
 }

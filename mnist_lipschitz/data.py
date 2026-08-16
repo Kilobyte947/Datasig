@@ -1,10 +1,9 @@
-"""MNIST loading for the Lipschitz-diagnostics experiment.
+"""This file loads MNIST data, and hands back three views of the same pixels: 
+1. flattened 784-dimensional vectors (what the estimators actually operate on)
+2. the original 28x28 image shape (needed for the CNN, which expects a 2D image structure to run its convolution filters over)
+3. integer digit labels
 
-Pixel values are kept in [0, 1] (ToTensor() only, no ImageNet-style
-Normalize) so that raw pixel differences remain directly interpretable --
-the covariance/Mahalanobis work in distance.py operates on these same
-values, and a mean/std normalization would silently rescale distances in
-ways that would need to be undone there.
+Pixel values are kept in [0, 1] (ToTensor() only, no ImageNet-style Normalize) so that raw pixel differences remain directly interpretable.
 """
 
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets, transforms
 
-torch.set_default_dtype(torch.float64)
+torch.set_default_dtype(torch.float64) # needed everywhere to avoid silent float32->float64 upcasting and the resulting performance hit.
 
 DATA_ROOT = Path(__file__).resolve().parent / "data"
 
@@ -30,14 +29,9 @@ class MNISTData:
 
 
 def load_mnist(root=DATA_ROOT, train=True):
-    """Load MNIST via torchvision, values in [0, 1], both flattened (784,)
-    and image (1, 28, 28) views of the same underlying pixels."""
+    """Load the MNIST dataset and return it as a MNISTData dataclass."""
     transform = transforms.ToTensor()  # scales uint8 [0,255] -> float32 [0,1], no further normalization
     dataset = datasets.MNIST(root=str(root), train=train, download=True, transform=transform)
-
-    # Materialize the whole (small, 60k/10k image) dataset as tensors up front --
-    # the Lipschitz estimators operate on plain tensors of points, not on a
-    # DataLoader, so there's no benefit to lazy loading here.
     loader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
     x_image, y = next(iter(loader))
     x_image = x_image.to(torch.get_default_dtype())
@@ -48,27 +42,20 @@ def load_mnist(root=DATA_ROOT, train=True):
 
 
 def get_dev_subset(data, n, seed):
-    """A small, fixed, seeded subset of `data` for fast iteration during
-    development. Same seed always returns the same subset."""
+    """A small, fixed, seeded subset of `data` for fast iteration during development. 
+    Same seed always returns the same subset."""
     generator = torch.Generator().manual_seed(seed)
     idx = torch.randperm(len(data), generator=generator)[:n]
     return MNISTData(x_flat=data.x_flat[idx], x_image=data.x_image[idx], y=data.y[idx])
 
 
 def stratified_subset_idx(y, n_points, seed, exclude_idx=None):
-    """Index tensor for a subset of `n_points` drawn from `y` (integer
-    class labels), split as evenly as possible across classes -- unlike
-    get_dev_subset's plain uniform random draw, which can (and at small n
-    often does) under-represent some classes by chance. Used where a query
-    set needs to actually cover every digit 0-9, not just whatever a
-    single random draw happens to include.
-
-    If `exclude_idx` is given, those indices are excluded before sampling
-    -- used to keep this subset disjoint from an existing query set drawn
-    from the same pool (e.g. run_mnist_experiment's `query_idx`).
-
-    `n_points` must divide evenly across the number of classes present in
-    `y` (10, for MNIST); the returned subset has exactly n_points points.
+    """Return a stratified subset of indices from y, with n_points total, evenly distributed across classes. 
+    Important as MNIST is imbalanced and random sampling would have added its own noise on top, especially for small n_points.
+    
+    If `exclude_idx` is provided, those indices are excluded from the sampling - 
+    useful for creating a validation set (`query set`) that is disjoint from the training set. 
+    Used in sub-method comparison and ratio-distribution set.
     """
     generator = torch.Generator().manual_seed(seed)
     classes = torch.unique(y)
@@ -93,7 +80,7 @@ def stratified_subset_idx(y, n_points, seed, exclude_idx=None):
 
 
 def make_loader(x, y, batch_size=128, shuffle=True, seed=None):
-    """Wrap (x, y) tensors in a DataLoader for train_classifier."""
+    """Make a DataLoader from x and y tensors, with optional shuffling and seeding."""
     dataset = TensorDataset(x, y)
     if shuffle and seed is not None:
         generator = torch.Generator().manual_seed(seed)
