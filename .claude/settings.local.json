@@ -41,7 +41,8 @@
       "Bash(.venv/bin/python -m pytest toy_lipschitz/tests/ -q)",
       "Bash(.venv/bin/python /Users/yichaowang/.claude/jobs/cc0a5393/tmp/build_layer_decomposition_notebook.py)",
       "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v -s)",
-      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v)"
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v)",
+      "Bash(git merge *)"
     ]
   }
 }
