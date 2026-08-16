@@ -20,7 +20,7 @@ from mnist_lipschitz.estimators import (
     gradient_norm_estimate,
 )
 from mnist_lipschitz.distance import (
-    pixel_covariance, ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
+    svd_ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
     sweep_epsilon,
 )
 from mnist_lipschitz.plots import MODEL_ORDER
@@ -62,8 +62,7 @@ def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subs
             idx = torch.randperm(N, generator=generator)[:n_sub]
             x_sub, y_sub = dataset.x_flat[idx], dataset.y[idx]
 
-            Sigma_sub = pixel_covariance(x_sub)
-            precision = ridge_precision(Sigma_sub, eps)
+            precision = svd_ridge_precision(x_sub, eps)
 
             pt_idx = torch.randperm(x_sub.shape[0], generator=generator)[:n_points]
             vals = gradient_norm_estimate(model, x_sub[pt_idx], y_sub[pt_idx], margin_fn, precision=precision)
@@ -340,9 +339,8 @@ def run_mnist_experiment(
     # Step 3: epsilon selection (pixel covariance + ridge regularization)
     if verbose:
         print("\n === Step 3: epsilon selection (pixel covariance + ridge regularization) ===")
-    Sigma = pixel_covariance(train.x_flat)
-    eigenvalues = covariance_eigenvalues(Sigma)
-    cond_numbers = sweep_epsilon(Sigma, list(epsilon_values))
+    eigenvalues = covariance_eigenvalues(train.x_flat)
+    cond_numbers = sweep_epsilon(train.x_flat, list(epsilon_values))
     stability_results = epsilon_stability_check(
         lr_model, train, list(epsilon_values), n_subsamples=n_subsamples,
         subsample_frac=subsample_frac, n_points=stability_n_points, seed=seed, verbose=verbose)
@@ -350,7 +348,7 @@ def run_mnist_experiment(
     selected_epsilon = select_epsilon(list(epsilon_values), cond_numbers, cv_values,
                                        max_cond=max_cond, max_cv=max_cv, verbose=verbose)
 
-    precision = ridge_precision(Sigma, selected_epsilon)
+    precision = svd_ridge_precision(train.x_flat, selected_epsilon)
     mahalanobis_distance_fn = make_mahalanobis_distance_fn(precision)
 
     # Step 4: Mahalanobis-distance estimators on all three models
@@ -436,7 +434,6 @@ def run_mnist_experiment(
         "cond_numbers": cond_numbers,
         "cv_values": cv_values,
         "epsilon_values": list(epsilon_values),
-        "Sigma": Sigma,
         "covariance_eigenvalues": eigenvalues,
     }
 

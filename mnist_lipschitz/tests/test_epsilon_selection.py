@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mnist_lipschitz.data import load_mnist, get_dev_subset, make_loader
 from mnist_lipschitz.models import LogisticRegressionModel, train_classifier
-from mnist_lipschitz.distance import pixel_covariance
 from mnist_lipschitz.run_experiment import sweep_epsilon, epsilon_stability_check, select_epsilon
 
 EPSILON_VALUES = [1e-6, 1e-1, 10.0]  # near-singular, moderate, well-regularized
@@ -31,10 +30,9 @@ def test_condition_number_monotonically_non_increasing_with_epsilon():
     # pulled toward 1:1 ratios as eps grows), so this should never be flaky.
     torch.manual_seed(0)
     _, dev = _dev_model_and_data(seed=0)
-    Sigma = pixel_covariance(dev.x_flat)
 
     epsilon_values = [1e-6, 1e-3, 1e-1, 1.0, 10.0, 100.0]
-    conds = sweep_epsilon(Sigma, epsilon_values)
+    conds = sweep_epsilon(dev.x_flat, epsilon_values)
 
     for a, b in zip(conds, conds[1:]):
         assert b <= a + 1e-6, f"condition number increased: {conds}"
