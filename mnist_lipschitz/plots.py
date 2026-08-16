@@ -255,3 +255,56 @@ def plot_image_pairs(pairs, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_layer_decomposition_sweep(df, save_path=None):
+    """`L_head` (exact + estimated), `L_extractor`, `product`
+    (`L_extractor_estimated * L_head_exact`), and `L_full` as a function of
+    CNN width (one line each, log-y since they can span more than an order
+    of magnitude across widths), plus `looseness_ratio` vs. width in a
+    second panel with a reference line at 1.0 -- the theoretical floor the
+    submultiplicative bound (Szegedy et al. 2014) guarantees `product`
+    should never fall below, the same reference-line convention
+    `plot_epsilon_sweep`'s `selected_epsilon` line and `plot_sweep`'s `L*`
+    line use elsewhere in this project.
+
+    The second panel also plots `looseness_ratio_estimated` (using
+    `L_head_estimated` in the product instead of the exact spectral norm)
+    as a dashed line -- it is *not* guaranteed to stay above the 1.0
+    reference line the way `looseness_ratio` is, since `L_head_estimated`
+    is itself only ever a lower bound on the true `L_head` (see
+    `layer_decomposition_experiment`'s docstring), so it's shown for
+    comparison rather than as a second checkpoint.
+
+    `df`: the DataFrame `layer_decomposition.run_cnn_width_sweep` returns
+    (or anything with the same `width`/`L_head_exact`/`L_head_estimated`/
+    `L_extractor_estimated`/`L_full_estimated`/`product`/`looseness_ratio`/
+    `looseness_ratio_estimated` columns).
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    ax1.plot(df["width"], df["L_head_exact"], marker="o", color="tab:blue", label="L_head (exact)")
+    ax1.plot(df["width"], df["L_head_estimated"], marker="o", color="tab:blue",
+              linestyle="--", alpha=0.6, label="L_head (estimated)")
+    ax1.plot(df["width"], df["L_extractor_estimated"], marker="s", color="tab:orange", label="L_extractor")
+    ax1.plot(df["width"], df["product"], marker="^", color="tab:green", label="product (L_extractor * L_head_exact)")
+    ax1.plot(df["width"], df["L_full_estimated"], marker="D", color="tab:red", label="L_full")
+    ax1.set_yscale("log")
+    ax1.set_xlabel("CNN width")
+    ax1.set_ylabel("Lipschitz estimate (log scale)")
+    ax1.set_title("Layer-decomposed Lipschitz estimates vs. width")
+    ax1.legend(fontsize=8)
+
+    ax2.axhline(1.0, color="black", linestyle="--", label="theoretical floor (looseness_ratio=1)")
+    ax2.plot(df["width"], df["looseness_ratio"], marker="o", color="tab:purple", label="looseness_ratio")
+    ax2.plot(df["width"], df["looseness_ratio_estimated"], marker="o", color="tab:purple",
+              linestyle="--", alpha=0.6, label="looseness_ratio_estimated (all-estimated)")
+    ax2.set_xlabel("CNN width")
+    ax2.set_ylabel("looseness_ratio = product / L_full")
+    ax2.set_title("Bound looseness vs. width")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("Layer decomposition: L_head, L_extractor, and the per-layer Lipschitz bound")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

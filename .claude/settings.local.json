@@ -21,7 +21,27 @@
       "Bash(git check-ignore *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('mnist_lipschitz/plots.py'\\).read\\(\\)\\); print\\('syntax ok'\\)\")",
+      "Bash(.venv/bin/python /Users/yichaowang/.claude/jobs/cc0a5393/tmp/merge_mnist_notebook.py)",
+      "Bash(.venv/bin/python -m pytest toy_lipschitz/tests/ mnist_lipschitz/tests/ -q)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/ -q)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_estimators.py -v)",
+      "Bash(.venv/bin/python /Users/yichaowang/.claude/jobs/cc0a5393/tmp/add_dist_margin_columns.py)",
+      "Bash(.venv/bin/python /Users/yichaowang/.claude/jobs/cc0a5393/tmp/update_markdown_desc.py)",
+      "Bash(git fetch *)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_models.py -v)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_estimators.py -v -k linear_layer)",
+      "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('mnist_lipschitz/estimators.py'\\).read\\(\\)\\); print\\('syntax ok'\\)\")",
+      "Bash(.venv/bin/python -c \"import pandas; print\\(pandas.__version__\\)\")",
+      "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('mnist_lipschitz/layer_decomposition.py'\\).read\\(\\)\\); print\\('syntax ok'\\)\")",
+      "Bash(time .venv/bin/python -c ' *)",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c ' *)",
+      "Bash(time .venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v -s)",
+      "Bash(.venv/bin/python -m pytest toy_lipschitz/tests/ -q)",
+      "Bash(.venv/bin/python /Users/yichaowang/.claude/jobs/cc0a5393/tmp/build_layer_decomposition_notebook.py)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v -s)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests/test_layer_decomposition.py -v)"
     ]
   }
 }

@@ -5,6 +5,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import torch.nn as nn
+
 from mnist_lipschitz.models import LogisticRegressionModel, margin_fn
 from mnist_lipschitz.estimators import (
     euclidean_distance_fn,
@@ -13,6 +15,7 @@ from mnist_lipschitz.estimators import (
     gradient_norm_estimate,
     ratio_and_components_for_pairs,
     ratio_for_pairs,
+    linear_layer_lipschitz,
 )
 
 # --- Critical checkpoint: closed-form agreement on logistic regression ---
@@ -192,3 +195,97 @@ def test_ratio_and_components_for_pairs_matches_ratio_for_pairs_and_is_self_cons
     assert torch.allclose(ratio, margin_diff / dist.clamp_min(1e-12), atol=1e-9)
     assert (dist >= 0).all()
     assert (margin_diff >= 0).all()
+
+
+def test_linear_layer_lipschitz_on_diagonal_matrix_with_known_singular_values():
+    """A diagonal weight matrix's singular values are exactly the absolute
+    values of its diagonal entries -- the largest one is the spectral norm
+    by construction, no numerical approximation needed to know the answer."""
+    layer = nn.Linear(4, 4, bias=False)
+    with torch.no_grad():
+        layer.weight.copy_(torch.diag(torch.tensor([3.0, -7.0, 1.0, 5.0])))
+
+    L = linear_layer_lipschitz(layer)
+    assert abs(L - 7.0) < 1e-9
+
+
+def test_linear_layer_lipschitz_matches_svdvals_max():
+    torch.manual_seed(3)
+    layer = nn.Linear(20, 8)  # non-square, with bias -- bias must not affect the Lipschitz constant
+
+    L = linear_layer_lipschitz(layer)
+    expected = torch.linalg.svdvals(layer.weight.detach()).max().item()
+    assert abs(L - expected) < 1e-9
+
+
+def test_linear_layer_lipschitz_ignores_bias():
+    torch.manual_seed(4)
+    layer = nn.Linear(6, 6)
+    L_with_bias = linear_layer_lipschitz(layer)
+    with torch.no_grad():
+        layer.bias.zero_()
+    L_no_bias = linear_layer_lipschitz(layer)
+    assert L_with_bias == L_no_bias
+
+
+# --- Vector-valued output_fn generalization (layer_decomposition's L_extractor) ---
+#
+# gradient_norm_estimate's vector-output path computes a per-example
+# Jacobian spectral norm, a genuinely different (and more expensive)
+# computation than the scalar-output fast path. A linear map's Jacobian
+# equals its weight matrix everywhere (constant, not just locally), so
+# this is a clean closed-form check: the estimate must match
+# linear_layer_lipschitz's exact spectral norm at every point, not just on
+# average.
+
+def _linear_vector_output_fn(model, x, y):
+    return model(x)  # `model` is an nn.Linear layer itself here; y unused
+
+
+def test_gradient_norm_estimate_vector_path_matches_linear_layer_lipschitz_exactly():
+    torch.manual_seed(8)
+    layer = nn.Linear(10, 4)
+    x_batch = torch.randn(6, 10)
+    y_batch = torch.zeros(6, dtype=torch.int64)  # unused by _linear_vector_output_fn
+
+    spectral_norms = gradient_norm_estimate(layer, x_batch, y_batch, _linear_vector_output_fn)
+    expected = linear_layer_lipschitz(layer)
+
+    assert spectral_norms.shape == (6,)
+    assert torch.allclose(spectral_norms, torch.full((6,), expected), atol=1e-8)
+
+
+def test_gradient_norm_estimate_vector_path_rejects_mahalanobis():
+    torch.manual_seed(8)
+    layer = nn.Linear(10, 4)
+    x_batch = torch.randn(3, 10)
+    y_batch = torch.zeros(3, dtype=torch.int64)
+    precision = torch.eye(10)
+
+    try:
+        gradient_norm_estimate(layer, x_batch, y_batch, _linear_vector_output_fn, precision=precision)
+        assert False, "expected NotImplementedError for vector output_fn + precision"
+    except NotImplementedError:
+        pass
+
+
+def test_pairwise_and_local_perturbation_generalize_to_vector_output_and_stay_bounded():
+    """No closed-form target for pairwise/local on a linear map beyond the
+    Cauchy-Schwarz upper bound (linear_layer_lipschitz) -- random pairs
+    won't generally align with the top singular direction -- so this
+    checks the generalized vector-output path runs, returns sane shapes,
+    and never exceeds that bound (up to float tolerance)."""
+    torch.manual_seed(9)
+    layer = nn.Linear(10, 4)
+    x_batch = torch.randn(30, 10)
+    y_batch = torch.zeros(30, dtype=torch.int64)
+    L_star = linear_layer_lipschitz(layer)
+
+    L_pairwise, i, j = pairwise_lipschitz(layer, x_batch, y_batch, _linear_vector_output_fn)
+    assert L_pairwise <= L_star * 1.01
+    assert i != j
+
+    local_vals = local_perturbation_lipschitz(layer, x_batch, y_batch, _linear_vector_output_fn,
+                                               radius=1.0, n_directions=50, seed=1)
+    assert local_vals.shape == (30,)
+    assert (local_vals <= L_star * 1.01).all()

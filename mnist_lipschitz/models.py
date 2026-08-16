@@ -59,24 +59,36 @@ class SmallMLP(nn.Module):
 
 class SmallCNN(nn.Module):
     """Two conv+pool blocks, then a small FC head. Deliberately small/fast --
-    this is a diagnostics project, not an accuracy benchmark."""
+    this is a diagnostics project, not an accuracy benchmark.
 
-    def __init__(self, num_classes=10):
+    Split into two explicitly separate, independently callable submodules --
+    `extractor` (everything up to and including the flatten) and `head` (the
+    final linear layer, raw logits) -- so the layer-decomposition
+    sub-experiment (layer_decomposition.py) can evaluate each in isolation
+    (`model.extractor(x)`, `model.head(features)`) without forward hooks.
+    `forward(x)` is unchanged in behavior: `model(x) == model.head(model.extractor(x))`
+    exactly (see tests/test_layer_decomposition.py), and every constructor
+    argument and the trained-accuracy behavior are unaffected by this split
+    -- it's a pure module-structure refactor, channel sizes/kernel/pooling
+    are identical to before.
+    """
+
+    def __init__(self, num_classes=10, conv_channels=(16, 32)):
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),   # (1,28,28) -> (16,28,28)
+        c1, c2 = conv_channels
+        self.extractor = nn.Sequential(
+            nn.Conv2d(1, c1, kernel_size=3, padding=1),    # (1,28,28) -> (c1,28,28)
             nn.ReLU(),
-            nn.MaxPool2d(2),                               # -> (16,14,14)
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),   # -> (32,14,14)
+            nn.MaxPool2d(2),                                # -> (c1,14,14)
+            nn.Conv2d(c1, c2, kernel_size=3, padding=1),    # -> (c2,14,14)
             nn.ReLU(),
-            nn.MaxPool2d(2),                               # -> (32,7,7)
+            nn.MaxPool2d(2),                                # -> (c2,7,7)
+            nn.Flatten(start_dim=1),                        # -> (c2*7*7,)
         )
-        self.classifier = nn.Linear(32 * 7 * 7, num_classes)
+        self.head = nn.Linear(c2 * 7 * 7, num_classes)
 
     def forward(self, x):
-        x = self.features(x)
-        x = x.flatten(start_dim=1)
-        return self.classifier(x)
+        return self.head(self.extractor(x))
 
 
 class FlattenedInputWrapper(nn.Module):

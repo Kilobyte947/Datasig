@@ -85,3 +85,40 @@ def test_margin_fn_is_differentiable_wrt_x():
     assert x.grad is not None
     assert x.grad.shape == x.shape
     assert torch.isfinite(x.grad).all()
+
+
+def test_cnn_forward_matches_head_of_extractor():
+    """The extractor/head split must be a pure refactor: forward(x) has to
+    equal head(extractor(x)) exactly, for every input, not just on average."""
+    torch.manual_seed(0)
+    model = SmallCNN()
+    x = torch.rand(8, 1, 28, 28)
+
+    direct = model(x)
+    composed = model.head(model.extractor(x))
+    assert torch.equal(direct, composed)
+
+
+def test_cnn_extractor_and_head_shapes():
+    torch.manual_seed(0)
+    model = SmallCNN()
+    x = torch.rand(5, 1, 28, 28)
+
+    features = model.extractor(x)
+    assert features.shape == (5, 32 * 7 * 7)
+
+    logits = model.head(features)
+    assert logits.shape == (5, 10)
+
+
+def test_cnn_conv_channels_parameter_changes_width_but_preserves_default():
+    torch.manual_seed(0)
+    default_model = SmallCNN()
+    assert default_model.head.in_features == 32 * 7 * 7  # unchanged default behavior
+
+    torch.manual_seed(0)
+    narrow_model = SmallCNN(conv_channels=(4, 8))
+    assert narrow_model.head.in_features == 8 * 7 * 7
+    x = torch.rand(3, 1, 28, 28)
+    out = narrow_model(x)
+    assert out.shape == (3, 10)
