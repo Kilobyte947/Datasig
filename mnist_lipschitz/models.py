@@ -91,6 +91,77 @@ class SmallCNN(nn.Module):
         return self.head(self.extractor(x))
 
 
+class StrongCNN(nn.Module):
+    """Higher-capacity CNN aimed at near-state-of-the-art MNIST accuracy
+    (target ~99.3%+ test accuracy), built as a stronger baseline ahead of
+    the data-cleaning experiment -- NOT a replacement for `SmallCNN`, which
+    stays exactly as-is as the original, deliberately modest baseline (see
+    mnist_lipschitz/README.md's three-model capacity comparison).
+
+    Fixed architecture (paired with `STRONG_CNN_CONFIG` below for the
+    exact training recipe) -- recorded here, not just in a notebook cell,
+    because the later data-cleaning experiment reuses this exact
+    architecture unchanged and needs something durable to point to:
+
+      Conv2d(1->32, 3x3, pad=1) -> BatchNorm2d(32) -> ReLU
+      Conv2d(32->32, 3x3, pad=1) -> BatchNorm2d(32) -> ReLU
+      MaxPool2d(2) -> Dropout2d(p=dropout_conv)                      # (32,14,14)
+      Conv2d(32->64, 3x3, pad=1) -> BatchNorm2d(64) -> ReLU
+      Conv2d(64->64, 3x3, pad=1) -> BatchNorm2d(64) -> ReLU
+      MaxPool2d(2) -> Dropout2d(p=dropout_conv)                      # (64,7,7)
+      Flatten -> Linear(64*7*7 -> 256) -> BatchNorm1d(256) -> ReLU -> Dropout(p=dropout_fc)
+      Linear(256 -> num_classes)
+
+    No extractor/head split (unlike `SmallCNN`) -- that split exists
+    specifically to support `layer_decomposition.py`'s sub-experiment,
+    which this model isn't part of.
+    """
+
+    def __init__(self, num_classes=10, dropout_conv=0.25, dropout_fc=0.5):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1), nn.BatchNorm2d(32), nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1), nn.BatchNorm2d(32), nn.ReLU(),
+            nn.MaxPool2d(2), nn.Dropout2d(dropout_conv),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1), nn.BatchNorm2d(64), nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.BatchNorm2d(64), nn.ReLU(),
+            nn.MaxPool2d(2), nn.Dropout2d(dropout_conv),
+            nn.Flatten(start_dim=1),
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(64 * 7 * 7, 256), nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(dropout_fc),
+            nn.Linear(256, num_classes),
+        )
+
+    def forward(self, x):
+        return self.classifier(self.features(x))
+
+
+# Exact training recipe for StrongCNN's raw-MNIST baseline -- kept as one
+# importable, durable config (not a notebook cell) so the later
+# data-cleaning experiment can reuse it byte-for-byte. Consumed by
+# run_experiment.py::run_stronger_cnn_raw_mnist_experiment, which builds
+# an augmentation.random_affine_augment closure from the augment_* keys and
+# a torch.optim.lr_scheduler.CosineAnnealingLR from the lr_scheduler_* keys,
+# and passes both to train_classifier below via its augment_fn/
+# lr_scheduler_fn parameters.
+STRONG_CNN_CONFIG = {
+    "epochs": 25,
+    "lr": 1e-3,
+    "batch_size": 256,
+    "optimizer": "adam",
+    "lr_scheduler": "cosine_annealing",
+    "lr_scheduler_t_max": 25,        # == epochs: one full cosine cycle over the whole run
+    "lr_scheduler_eta_min": 1e-5,
+    "augment_degrees": 10.0,          # max +/- rotation, degrees
+    "augment_translate": 0.1,         # max +/- shift, fraction of image size
+    "dropout_conv": 0.25,
+    "dropout_fc": 0.5,
+    "conv_channels": (32, 32, 64, 64),
+    "fc_hidden": 256,
+}
+
+
 class FlattenedInputWrapper(nn.Module):
     """Wraps a model that expects (N, 1, 28, 28) image input (i.e. SmallCNN)
     so it instead accepts (N, 784) flat input, reshaping internally.
@@ -111,11 +182,27 @@ class FlattenedInputWrapper(nn.Module):
         return self.model(x.reshape(x.shape[0], 1, 28, 28))
 
 
-def train_classifier(model, train_loader, test_loader, epochs, lr, device=DEVICE, verbose=True):
-    """Plain cross-entropy + Adam training loop. Returns (model, train_acc, test_acc)."""
+def train_classifier(model, train_loader, test_loader, epochs, lr, device=DEVICE, verbose=True,
+                      augment_fn=None, lr_scheduler_fn=None):
+    """Plain cross-entropy + Adam training loop. Returns (model, train_acc, test_acc).
+
+    `augment_fn` (optional): called as `augment_fn(x)` on each training
+    batch's input before the forward pass -- e.g.
+    `augmentation.random_affine_augment` -- applied only during training,
+    never at eval time. Left `None` (the default), this is exactly the
+    original unaugmented loop: every pre-existing caller (logistic
+    regression, MLP, the original `SmallCNN`) is unaffected.
+
+    `lr_scheduler_fn` (optional): called once as `lr_scheduler_fn(optimizer)`
+    to build a scheduler object (e.g. a `torch.optim.lr_scheduler`
+    instance), whose `.step()` is called once per epoch, after that
+    epoch's batches (not per batch). Left `None` (the default), lr stays
+    fixed at `lr` throughout, exactly as before.
+    """
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
+    scheduler = lr_scheduler_fn(optimizer) if lr_scheduler_fn is not None else None
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -123,6 +210,8 @@ def train_classifier(model, train_loader, test_loader, epochs, lr, device=DEVICE
         n_seen = 0
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
+            if augment_fn is not None:
+                x = augment_fn(x)
             optimizer.zero_grad()
             logits = model(x)
             loss = criterion(logits, y)
@@ -130,8 +219,11 @@ def train_classifier(model, train_loader, test_loader, epochs, lr, device=DEVICE
             optimizer.step()
             running_loss += loss.item() * x.size(0)
             n_seen += x.size(0)
+        if scheduler is not None:
+            scheduler.step()
         if verbose:
-            print(f"  epoch {epoch:2d}/{epochs}  train loss {running_loss / n_seen:.4f}")
+            lr_str = f"  lr={optimizer.param_groups[0]['lr']:.2e}" if scheduler is not None else ""
+            print(f"  epoch {epoch:2d}/{epochs}  train loss {running_loss / n_seen:.4f}{lr_str}", flush=True)
 
     train_acc = evaluate_accuracy(model, train_loader, device)
     test_acc = evaluate_accuracy(model, test_loader, device)

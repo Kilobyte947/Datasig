@@ -8,9 +8,10 @@ import torch
 from sklearn.neighbors import NearestNeighbors
 from mnist_lipschitz.data import load_mnist, get_dev_subset, make_loader, stratified_subset_idx
 from mnist_lipschitz.models import (
-    LogisticRegressionModel, SmallMLP, SmallCNN, FlattenedInputWrapper,
-    train_classifier, margin_fn, DEVICE,
+    LogisticRegressionModel, SmallMLP, SmallCNN, StrongCNN, STRONG_CNN_CONFIG,
+    FlattenedInputWrapper, train_classifier, margin_fn, DEVICE,
 )
+from mnist_lipschitz.augmentation import random_affine_augment
 from mnist_lipschitz.estimators import (
     euclidean_distance_fn,
     pairwise_lipschitz,
@@ -24,7 +25,9 @@ from mnist_lipschitz.distance import (
     sweep_epsilon,
 )
 from mnist_lipschitz.embeddings import elementwise_embedding
-from mnist_lipschitz.plots import MODEL_ORDER, plot_embedding_degree_sweep
+from mnist_lipschitz.plots import (
+    MODEL_ORDER, plot_embedding_degree_sweep, plot_ratio_distribution, plot_image_pairs,
+)
 
 torch.set_default_dtype(torch.float64)
 
@@ -381,6 +384,171 @@ def run_embedding_degree_sweep(
 
     return {"degree_results": degree_results, "ratio_results": ratio_results,
             "lr_model": lr_model, "train": train, "test": test, "figure": fig}
+
+
+def run_stronger_cnn_raw_mnist_experiment(
+    n_lipschitz_points=1000, local_radius=1.0, n_directions=20,
+    n_ratio_points=1000, k_neighbors=5,
+    mahalanobis_epsilon=0.01,
+    seed=SEED, verbose=True,
+):
+    """CNN-only counterpart to run_mnist_experiment(), for the higher-capacity
+    `StrongCNN` (models.py) on raw (uncleaned, standard train/test split)
+    MNIST -- a stronger baseline captured ahead of a later data-cleaning
+    experiment. Logistic regression and MLP, and the original `SmallCNN`
+    baseline, are untouched by this function and continue to live in
+    results/ exactly as before; this saves to its own
+    results/stronger_cnn_raw_mnist/ subfolder instead.
+
+    Trains StrongCNN with STRONG_CNN_CONFIG's exact recipe (batch norm,
+    dropout, light rotation/translation augmentation via
+    `augmentation.random_affine_augment`, a cosine-annealed learning rate,
+    and more epochs than SmallCNN's original 8) via train_classifier's
+    augment_fn/lr_scheduler_fn parameters, then runs the same three
+    Lipschitz sub-methods (pairwise, local-perturbation, gradient-norm) and
+    the same ratio-distribution/near-neighbor analysis
+    run_mnist_experiment() runs for the CNN, under both Euclidean and
+    Mahalanobis distance, on the same-shaped query/ratio-distribution
+    subsets (1000 points each, matching the existing safe-tested config --
+    see README's "Pairwise sampling keeps N modest" design decision).
+
+    Mahalanobis epsilon is *not* reselected here: raw MNIST's pixel
+    covariance is exactly the same data run_mnist_experiment() already
+    selected epsilon=0.01 for (see README's Epsilon selection section) --
+    reselecting via epsilon_stability_check (which trains a fresh reference
+    model and does several resampled SVDs) would just reproduce the same
+    answer at real extra cost. Pass a different `mahalanobis_epsilon`
+    explicitly if that assumption is ever revisited (e.g. once the
+    data-cleaning step changes the pixel covariance itself).
+    """
+    torch.manual_seed(seed)
+    train = load_mnist(train=True)
+    test = load_mnist(train=False)
+    train_img = make_loader(train.x_image, train.y, batch_size=STRONG_CNN_CONFIG["batch_size"],
+                             shuffle=True, seed=seed)
+    test_img = make_loader(test.x_image, test.y, batch_size=1000, shuffle=False)
+
+    augment_generator = torch.Generator().manual_seed(seed)
+    augment_fn = lambda x: random_affine_augment(
+        x, degrees=STRONG_CNN_CONFIG["augment_degrees"],
+        translate=STRONG_CNN_CONFIG["augment_translate"], generator=augment_generator)
+    lr_scheduler_fn = lambda opt: torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=STRONG_CNN_CONFIG["lr_scheduler_t_max"], eta_min=STRONG_CNN_CONFIG["lr_scheduler_eta_min"])
+
+    if verbose:
+        print("=== Training StrongCNN on raw MNIST ===", flush=True)
+    cnn_model_raw, cnn_train_acc, cnn_test_acc = train_classifier(
+        StrongCNN(dropout_conv=STRONG_CNN_CONFIG["dropout_conv"], dropout_fc=STRONG_CNN_CONFIG["dropout_fc"]),
+        train_img, test_img, epochs=STRONG_CNN_CONFIG["epochs"], lr=STRONG_CNN_CONFIG["lr"],
+        verbose=verbose, augment_fn=augment_fn, lr_scheduler_fn=lr_scheduler_fn)
+    cnn_model = FlattenedInputWrapper(cnn_model_raw)
+    if verbose:
+        print(f"StrongCNN: train_acc={cnn_train_acc:.4f}  test_acc={cnn_test_acc:.4f}", flush=True)
+
+    query_generator = torch.Generator().manual_seed(seed)
+    query_idx = torch.randperm(len(test), generator=query_generator)[:n_lipschitz_points]
+    x_query, y_query = test.x_flat[query_idx], test.y[query_idx]
+
+    if verbose:
+        print("\n=== Euclidean-distance estimators (StrongCNN) ===", flush=True)
+    euclidean_result = _run_estimators_for_model(
+        cnn_model, x_query, y_query, euclidean_distance_fn,
+        local_radius=local_radius, n_directions=n_directions, seed=seed)
+    if verbose:
+        r = euclidean_result
+        print(f"  pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
+              f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}", flush=True)
+
+    if verbose:
+        print("\n=== Euclidean ratio-distribution / near-neighbor analysis (StrongCNN) ===", flush=True)
+    ratio_euclidean = run_ratio_distribution_analysis(
+        cnn_model, "cnn", "euclidean", test.x_flat, test.y, euclidean_distance_fn,
+        exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+
+    precision = svd_ridge_precision(train.x_flat, mahalanobis_epsilon)
+    mahalanobis_distance_fn = make_mahalanobis_distance_fn(precision)
+
+    if verbose:
+        print(f"\n=== Mahalanobis-distance estimators (StrongCNN, epsilon={mahalanobis_epsilon:g}) ===", flush=True)
+    mahalanobis_result = _run_estimators_for_model(
+        cnn_model, x_query, y_query, mahalanobis_distance_fn, precision=precision,
+        local_radius=local_radius, n_directions=n_directions, seed=seed)
+    if verbose:
+        r = mahalanobis_result
+        print(f"  pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
+              f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}", flush=True)
+
+    if verbose:
+        print("\n=== Mahalanobis ratio-distribution / near-neighbor analysis (StrongCNN) ===", flush=True)
+    ratio_mahalanobis = run_ratio_distribution_analysis(
+        cnn_model, "cnn", "mahalanobis", test.x_flat, test.y, mahalanobis_distance_fn,
+        exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+
+    out_dir = RESULTS_DIR / "stronger_cnn_raw_mnist"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _labeled_pairs(top_pairs):
+        # top_pairs entries: (img1, img2, true1, pred1, true2, pred2, ratio, dist, margin_diff)
+        # -- images are dropped here (already saved as PNGs below); only the
+        # labels/ratio/components (what's needed to answer "which digit
+        # pairs get flagged") are kept in the JSON summary.
+        return [
+            {"true1": t1, "pred1": p1, "true2": t2, "pred2": p2,
+             "ratio": ratio, "dist": dist, "margin_diff": margin_diff}
+            for (_img1, _img2, t1, p1, t2, p2, ratio, dist, margin_diff) in top_pairs
+        ]
+
+    summary = {
+        "architecture": "StrongCNN (see models.py docstring for the exact fixed layer spec)",
+        "config": STRONG_CNN_CONFIG,
+        "accuracies": {"cnn": {"train": cnn_train_acc, "test": cnn_test_acc}},
+        "mahalanobis_epsilon": mahalanobis_epsilon,
+        "mahalanobis_epsilon_note": "reused from mnist_experiment_results.json -- raw pixel covariance is unchanged",
+        "euclidean": {"cnn": {k: v for k, v in euclidean_result.items() if not k.endswith("_vals")}},
+        "mahalanobis": {"cnn": {k: v for k, v in mahalanobis_result.items() if not k.endswith("_vals")}},
+        "ratio_distribution_analysis": {
+            "euclidean_cnn": ratio_euclidean["summary"],
+            "mahalanobis_cnn": ratio_mahalanobis["summary"],
+        },
+        "top_near_neighbor_pairs_euclidean": _labeled_pairs(ratio_euclidean["top_near_neighbor_pairs"]),
+        "top_near_neighbor_pairs_mahalanobis": _labeled_pairs(ratio_mahalanobis["top_near_neighbor_pairs"]),
+        "config_run": {
+            "n_lipschitz_points": n_lipschitz_points, "local_radius": local_radius,
+            "n_directions": n_directions, "n_ratio_points": n_ratio_points,
+            "k_neighbors": k_neighbors, "seed": seed,
+        },
+    }
+    with open(out_dir / "stronger_cnn_raw_mnist_results.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    arrays = {
+        "euclidean_cnn_local": np.array(euclidean_result["local_vals"]),
+        "euclidean_cnn_grad": np.array(euclidean_result["grad_vals"]),
+        "mahalanobis_cnn_local": np.array(mahalanobis_result["local_vals"]),
+        "mahalanobis_cnn_grad": np.array(mahalanobis_result["grad_vals"]),
+    }
+    arrays.update(ratio_euclidean["arrays"])
+    arrays.update(ratio_mahalanobis["arrays"])
+    np.savez(out_dir / "stronger_cnn_raw_mnist_arrays.npz", **arrays)
+
+    plot_ratio_distribution({"cnn": ratio_euclidean}, metric_name="Euclidean",
+                             save_path=out_dir / "ratio_distribution_euclidean.png")
+    plot_ratio_distribution({"cnn": ratio_mahalanobis}, metric_name="Mahalanobis",
+                             save_path=out_dir / "ratio_distribution_mahalanobis.png")
+    plot_image_pairs(ratio_euclidean["top_near_neighbor_pairs"],
+                      save_path=out_dir / "top_near_neighbor_pairs_euclidean.png")
+    plot_image_pairs(ratio_mahalanobis["top_near_neighbor_pairs"],
+                      save_path=out_dir / "top_near_neighbor_pairs_mahalanobis.png")
+
+    if verbose:
+        print(f"\nSaved results to {out_dir}", flush=True)
+
+    return {
+        "cnn_model": cnn_model, "train_acc": cnn_train_acc, "test_acc": cnn_test_acc,
+        "euclidean_result": euclidean_result, "mahalanobis_result": mahalanobis_result,
+        "ratio_euclidean": ratio_euclidean, "ratio_mahalanobis": ratio_mahalanobis,
+        "train": train, "test": test,
+    }
 
 
 def run_mnist_experiment(
