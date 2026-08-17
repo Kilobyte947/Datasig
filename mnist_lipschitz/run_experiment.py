@@ -86,7 +86,7 @@ def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subs
         cv = std / mean if mean > 1e-12 else float("inf")
         results[eps] = {"L_hats": L_hats, "mean": mean, "std": std, "cv": cv}
         if verbose:
-            print(f"  epsilon={eps:<10g} mean L_hat={mean:.4f}  std={std:.4f}  cv={cv:.4f}")
+            print(f"  epsilon={eps:<10g} mean L_hat={mean:.4f}  std={std:.4f}  cv={cv:.4f}", flush=True)
 
     return results
 
