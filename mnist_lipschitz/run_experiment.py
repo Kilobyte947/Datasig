@@ -487,6 +487,11 @@ def run_stronger_cnn_raw_mnist_experiment(
     out_dir = RESULTS_DIR / "stronger_cnn_raw_mnist"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Persist trained weights alongside the results -- without this, later
+    # inspection of specific flagged pairs (e.g. re-running the model to get
+    # per-image softmax confidences) would require retraining from scratch.
+    torch.save(cnn_model_raw.state_dict(), out_dir / "strong_cnn_state_dict.pt")
+
     def _labeled_pairs(top_pairs):
         # top_pairs entries: (img1, img2, true1, pred1, true2, pred2, ratio, dist, margin_diff)
         # -- images are dropped here (already saved as PNGs below); only the

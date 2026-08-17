@@ -203,6 +203,57 @@ def plot_image_pairs(pairs, save_path=None):
     return fig
 
 
+def plot_pair_diagnostic_gallery(pairs, title=None, save_path=None):
+    """Diagnostic gallery for a hand-picked list of image pairs: extends
+    `plot_image_pairs`'s image + true/pred + ratio format with a third
+    panel per row showing the pixel-level absolute difference between the
+    pair, on its own color scale so a small difference is still visible
+    (not squashed to near-black against the [0,1] image range) -- built to
+    visually rule out a data/preprocessing artefact (near-duplicate
+    images, a normalization bug, an indexing bug pairing a point with
+    itself or a corrupted copy) before treating a high-ratio pair as a
+    genuine model-confusion finding.
+
+    `pairs`: list of dicts, each with `img1`/`img2` (flat 784 or (28,28)
+    arrays), `true1`/`pred1`/`true2`/`pred2`, `ratio`/`dist`/`margin_diff`,
+    and optionally `confidence1`/`confidence2` (softmax probability of the
+    predicted class) -- included in the label when present; omitted
+    (rather than shown as a fabricated number) when not, e.g. when no
+    trained-model checkpoint was available to compute them.
+    """
+    n = len(pairs)
+    fig, axes = plt.subplots(n, 3, figsize=(8, 2.6 * n))
+    axes = np.atleast_2d(axes)
+
+    for row, p in enumerate(pairs):
+        img1 = np.asarray(p["img1"]).reshape(28, 28)
+        img2 = np.asarray(p["img2"]).reshape(28, 28)
+        diff = np.abs(img1 - img2)
+
+        conf1, conf2 = p.get("confidence1"), p.get("confidence2")
+        label1 = f"true={p['true1']} pred={p['pred1']}" + (f"\nconf={conf1:.1%}" if conf1 is not None else "")
+        label2 = f"true={p['true2']} pred={p['pred2']}" + (f"\nconf={conf2:.1%}" if conf2 is not None else "")
+
+        axes[row, 0].imshow(img1, cmap="gray", vmin=0, vmax=1)
+        axes[row, 0].set_title(label1, fontsize=8)
+        axes[row, 1].imshow(img2, cmap="gray", vmin=0, vmax=1)
+        axes[row, 1].set_title(label2, fontsize=8)
+        axes[row, 2].imshow(diff, cmap="hot", vmin=0, vmax=max(diff.max(), 1e-6))
+        axes[row, 2].set_title(f"|diff| (max={diff.max():.2f}, mean={diff.mean():.3f})", fontsize=8)
+
+        for col in range(3):
+            axes[row, col].set_xticks([])
+            axes[row, col].set_yticks([])
+        axes[row, 0].set_ylabel(
+            f"ratio={p['ratio']:.3g}\ndist={p['dist']:.3g}\n|Δmargin|={p['margin_diff']:.3g}",
+            fontsize=8, rotation=0, ha="right", va="center", labelpad=45)
+
+    fig.suptitle(title or "Pair diagnostic gallery: images, predictions, and pixel-level difference")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
 def plot_layer_decomposition_sweep(df, save_path=None):
     """`L_head` (exact + estimated), `L_extractor`, `product`
     (`L_extractor_estimated * L_head_exact`), and `L_full` as a function of

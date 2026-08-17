@@ -186,6 +186,13 @@ and predictions for visual inspection.
 .venv/bin/jupyter nbconvert --to notebook --execute --inplace mnist_lipschitz/notebook_mnist_lipschitz.ipynb
 ```
 
+As of the StrongCNN addition (`models.py`'s `StrongCNN`/`augmentation.py`),
+`mnist_lipschitz/tests/` has **71 tests**. A figure of 58 has circulated in
+discussion of this suite before; it doesn't match any commit in this repo's
+history, so it was likely just stale. Treat the exact count as something that
+drifts as tests are added rather than a fixed number to remember -- run the
+command above for the current figure.
+
 `run_experiment.main()` calls `run_mnist_experiment()` with its default
 configuration (15 epochs for logistic regression and the MLP, 8 for the
 CNN; 1000 Lipschitz query points; a 1000-point ratio-distribution subset;
