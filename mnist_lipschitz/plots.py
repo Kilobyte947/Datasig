@@ -254,3 +254,48 @@ def plot_layer_decomposition_sweep(df, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_embedding_degree_sweep(degree_results, save_path=None):
+    """For embeddings.py::elementwise_embedding at each degree in `degree_results` (as built by
+    run_experiment.py::run_embedding_degree_sweep): the selected epsilon's condition number
+    (left) and the ratio-distribution all-pairs/near-neighbor means (right), both against
+    embedding degree -- the two-panel view that makes the sweep's two headline findings directly
+    visible: condition number climbs with degree (embedding into a higher-dimensional space), while
+    both ratio summary stats shrink with degree and the near-neighbor mean stays below the
+    all-pairs mean at every degree tested (the reversal finding first established at degree=1
+    under plain Mahalanobis distance -- see README).
+
+    `degree_results`: dict keyed by degree (int), each value having `selected_epsilon`,
+    `cond_number_at_selected_epsilon`, and `ratio_summary` (with `all_pairs_mean`/
+    `near_neighbor_mean` keys) -- exactly `run_embedding_degree_sweep`'s `degree_results` return.
+    """
+    degrees = sorted(degree_results.keys())
+    cond_numbers = [degree_results[d]["cond_number_at_selected_epsilon"] for d in degrees]
+    selected_epsilons = [degree_results[d]["selected_epsilon"] for d in degrees]
+    all_pairs_means = [degree_results[d]["ratio_summary"]["all_pairs_mean"] for d in degrees]
+    near_neighbor_means = [degree_results[d]["ratio_summary"]["near_neighbor_mean"] for d in degrees]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    ax1.plot(degrees, cond_numbers, marker="o", color="tab:blue")
+    for d, cond, eps in zip(degrees, cond_numbers, selected_epsilons):
+        ax1.annotate(f"eps={eps:g}", (d, cond), textcoords="offset points", xytext=(0, 8),
+                      fontsize=8, ha="center")
+    ax1.set_xlabel("embedding degree")
+    ax1.set_ylabel("cond(Sigma + eps*I) at selected epsilon")
+    ax1.set_xticks(degrees)
+    ax1.set_title("Condition number at selected epsilon vs. degree")
+
+    ax2.plot(degrees, all_pairs_means, marker="o", color="tab:blue", label="all-pairs mean")
+    ax2.plot(degrees, near_neighbor_means, marker="s", color="tab:orange", label="near-neighbor mean")
+    ax2.set_xlabel("embedding degree")
+    ax2.set_ylabel("ratio: |margin_i - margin_j| / distance(x_i, x_j)")
+    ax2.set_xticks(degrees)
+    ax2.set_title("Ratio-distribution summary vs. degree")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("Embedding degree sweep: elementwise_embedding, logistic regression, Mahalanobis distance")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

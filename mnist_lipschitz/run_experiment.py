@@ -23,7 +23,8 @@ from mnist_lipschitz.distance import (
     svd_ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
     sweep_epsilon,
 )
-from mnist_lipschitz.plots import MODEL_ORDER
+from mnist_lipschitz.embeddings import elementwise_embedding
+from mnist_lipschitz.plots import MODEL_ORDER, plot_embedding_degree_sweep
 
 torch.set_default_dtype(torch.float64)
 
@@ -259,6 +260,127 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
         "summary": summary,
         "arrays": arrays,
     }
+
+
+# ---------------------------------------------------------------------------
+# Embedding-degree sweep (opt-in, not part of main()/run_mnist_experiment())
+# ---------------------------------------------------------------------------
+
+def run_embedding_degree_sweep(
+    degrees=(1, 2, 3), lr_model=None, train=None, test=None, epsilon_pool=None,
+    epsilon_values=(1e-6, 1e-4, 1e-2, 1e-1, 1.0, 10.0, 100.0),
+    epsilon_pool_size=3000, n_subsamples=10, subsample_frac=0.8, stability_n_points=100,
+    max_cond=1e4, max_cv=0.05, n_ratio_points=1000, k_neighbors=5,
+    seed=SEED, verbose=True,
+):
+    """Repeats epsilon selection + ratio-distribution analysis, once per degree in `degrees`,
+    for `embeddings.py::elementwise_embedding` at that degree under Mahalanobis distance --
+    exercising the embed_fn-aware path in `epsilon_stability_check` and
+    `gradient_norm_estimate` (see their docstrings), which used to raise a dimension-mismatch
+    error for any degree > 1: a precision matrix sized for raw 784-pixel space cannot pair with
+    an embedded, higher-dimensional gradient.
+
+    Matches the setup validated in exploratory work before being promoted here: epsilon is
+    selected on a small, fixed `epsilon_pool_size`-point pool (`get_dev_subset`, not the full
+    60k) -- cheap enough to sweep several candidate epsilons x several subsamples x every degree
+    without retraining anything -- while the *final* precision matrix used for the
+    ratio-distribution analysis is fit on the full `train` set, matching every other precision
+    matrix in this file (e.g. `run_mnist_experiment`'s Mahalanobis step). Pass a pre-built
+    `epsilon_pool` to pin exactly which points are used (e.g. for an apples-to-apples test against
+    a raw-pixel baseline computed on the same pool); otherwise one is drawn via `get_dev_subset`.
+
+    Uses logistic regression as the reference model throughout, matching
+    `epsilon_stability_check`'s existing "one cheap, consistent yardstick" convention. `degree=1`
+    is `elementwise_embedding`'s identity case, so its results should closely match the
+    pre-existing raw-pixel (`embed_fn=None`) Mahalanobis pipeline on the same pool/model/seed --
+    checked directly in
+    `tests/test_epsilon_selection.py::test_run_embedding_degree_sweep_degree_1_matches_raw_pixel_baseline`,
+    not just assumed, since that's the only degree with a raw-pixel result to compare against.
+
+    If `lr_model`/`train`/`test` aren't given, this trains its own reference model and loads MNIST
+    fresh -- self-contained like `toy_lipschitz`'s opt-in seed-averaged sweep, at the cost of
+    retraining a model already trained by `run_mnist_experiment()` if that was also called. Pass
+    an already-trained model (and/or `train`/`test`) to skip that retraining.
+
+    This is markedly slower than `run_mnist_experiment()` alone -- fitting a precision matrix on
+    the full 60k-point set at `degree=3` means an SVD of a `(60000, 2352)` matrix, repeated across
+    every degree -- and is deliberately **not** called from `main()` (mirrors
+    `toy_lipschitz.run_experiment.run_gap_N_sweep_seed_averaged`'s "opt-in, not in main()"
+    convention); run it directly, e.g. from the notebook or the CLI.
+
+    Returns a dict: `degree_results` (keyed by degree, each holding `selected_epsilon`,
+    `epsilon_values`/`cond_numbers`/`cv_values` -- the full per-epsilon sweep --
+    `cond_number_at_selected_epsilon`, and `ratio_summary`), `lr_model`/`train`/`test` (for reuse
+    by a caller), and `figure` (`plots.plot_embedding_degree_sweep`'s output). Also saves a
+    summary JSON, the merged ratio-distribution arrays, and the plot to `results/`.
+    """
+    torch.manual_seed(seed)
+    if train is None:
+        train = load_mnist(train=True)
+    if test is None:
+        test = load_mnist(train=False)
+    if lr_model is None:
+        train_flat = make_loader(train.x_flat, train.y, batch_size=256, shuffle=True, seed=seed)
+        test_flat = make_loader(test.x_flat, test.y, batch_size=1000, shuffle=False)
+        lr_model, lr_train_acc, lr_test_acc = train_classifier(
+            LogisticRegressionModel(), train_flat, test_flat, epochs=15, lr=1e-3, verbose=verbose)
+        if verbose:
+            print(f"trained reference logistic-regression model: "
+                  f"train_acc={lr_train_acc:.4f}  test_acc={lr_test_acc:.4f}")
+    if epsilon_pool is None:
+        epsilon_pool = get_dev_subset(train, epsilon_pool_size, seed=seed)
+
+    degree_results = {}
+    ratio_results = {}
+    for degree in degrees:
+        if verbose:
+            print(f"\n=== embedding degree={degree} ===")
+        embed_fn = lambda x: elementwise_embedding(x, degree)
+
+        cond_numbers = sweep_epsilon(embed_fn(epsilon_pool.x_flat), list(epsilon_values))
+        stability_results = epsilon_stability_check(
+            lr_model, epsilon_pool, list(epsilon_values), n_subsamples=n_subsamples,
+            subsample_frac=subsample_frac, n_points=stability_n_points, seed=seed, verbose=verbose,
+            embed_fn=embed_fn)
+        cv_values = [stability_results[eps]["cv"] for eps in epsilon_values]
+        selected_epsilon = select_epsilon(list(epsilon_values), cond_numbers, cv_values,
+                                           max_cond=max_cond, max_cv=max_cv, verbose=verbose)
+        cond_at_selected = cond_numbers[list(epsilon_values).index(selected_epsilon)]
+
+        precision = svd_ridge_precision(embed_fn(train.x_flat), selected_epsilon)
+        mahalanobis_fn = make_mahalanobis_distance_fn(precision, embed_fn=embed_fn)
+
+        ratio_result = run_ratio_distribution_analysis(
+            lr_model, "logistic_regression", f"embedding_degree{degree}",
+            test.x_flat, test.y, mahalanobis_fn,
+            n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+        ratio_results[degree] = ratio_result
+
+        degree_results[degree] = {
+            "selected_epsilon": selected_epsilon,
+            "cond_number_at_selected_epsilon": cond_at_selected,
+            "epsilon_values": list(epsilon_values),
+            "cond_numbers": cond_numbers,
+            "cv_values": cv_values,
+            "ratio_summary": ratio_result["summary"],
+        }
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    with open(RESULTS_DIR / "embedding_degree_sweep_results.json", "w") as f:
+        json.dump({str(d): r for d, r in degree_results.items()}, f, indent=2)
+
+    arrays = {}
+    for r in ratio_results.values():
+        arrays.update(r["arrays"])
+    np.savez(RESULTS_DIR / "embedding_degree_sweep_arrays.npz", **arrays)
+
+    fig = plot_embedding_degree_sweep(degree_results, save_path=RESULTS_DIR / "embedding_degree_sweep.png")
+
+    if verbose:
+        print(f"\nSaved results to {RESULTS_DIR}")
+
+    return {"degree_results": degree_results, "ratio_results": ratio_results,
+            "lr_model": lr_model, "train": train, "test": test, "figure": fig}
 
 
 def run_mnist_experiment(

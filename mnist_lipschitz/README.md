@@ -143,15 +143,17 @@ and predictions for visual inspection.
 | `models.py` | `LogisticRegressionModel`, `SmallMLP`, `SmallCNN`, `FlattenedInputWrapper`, `train_classifier`, `evaluate_accuracy`, `margin_fn`. |
 | `estimators.py` | The three Lipschitz sub-methods (`pairwise_lipschitz`, `local_perturbation_lipschitz`, `gradient_norm_estimate`) plus the ratio-distribution support functions (`pairwise_lipschitz_all`, `ratio_and_components_for_pairs`, `ratio_for_pairs`). Imports `euclidean_distance_fn` from `distance.py` as the default metric. |
 | `distance.py` | Both distance functions (`euclidean_distance_fn`, `mahalanobis_distance`) and the pieces that build a Mahalanobis metric from data: `svd_ridge_precision`, `make_mahalanobis_distance_fn`, `covariance_eigenvalues`, `sweep_epsilon`. All built from the SVD of the raw pixel matrix directly — nothing in this file ever forms the `(784, 784)` covariance matrix explicitly. Pure linear algebra — no dependency on `models.py` or `estimators.py`. |
-| `run_experiment.py` | `epsilon_stability_check` and `select_epsilon` (the model-dependent half of epsilon selection), `run_ratio_distribution_analysis`, and `run_mnist_experiment` — the main driver that trains all three models, runs all three estimators and the ratio-distribution analysis under Euclidean distance, selects an epsilon, repeats both under Mahalanobis distance, and saves everything to `results/`. |
-| `plots.py` | `MODEL_ORDER`/`MODEL_LABELS` (the single source of truth for model iteration order and display names). `plot_euclidean_vs_mahalanobis`, `plot_epsilon_sweep`, `plot_submethod_agreement`, `plot_covariance_eigenvalues`, `plot_ratio_distribution`, `plot_ratio_distribution_euclidean_vs_mahalanobis`, `plot_image_pairs`. |
+| `embeddings.py` | `elementwise_embedding(x_flat, degree)` — maps each pixel through `[x, x**2, ..., x**degree]` independently (no cross-pixel terms), generalizing `toy_lipschitz/embeddings.py`'s polynomial-embedding convention to the 784-pixel setting. `degree=1` is the identity. |
+| `run_experiment.py` | `epsilon_stability_check` and `select_epsilon` (the model-dependent half of epsilon selection), `run_ratio_distribution_analysis`, `run_mnist_experiment` — the main driver that trains all three models, runs all three estimators and the ratio-distribution analysis under Euclidean distance, selects an epsilon, repeats both under Mahalanobis distance, and saves everything to `results/` — and `run_embedding_degree_sweep`, an opt-in (not part of `main()`) driver that repeats epsilon selection and the ratio-distribution analysis once per `elementwise_embedding` degree. |
+| `plots.py` | `MODEL_ORDER`/`MODEL_LABELS` (the single source of truth for model iteration order and display names). `plot_euclidean_vs_mahalanobis`, `plot_epsilon_sweep`, `plot_submethod_agreement`, `plot_covariance_eigenvalues`, `plot_ratio_distribution`, `plot_ratio_distribution_euclidean_vs_mahalanobis`, `plot_image_pairs`, `plot_embedding_degree_sweep`. |
 | `tests/test_data.py` | MNIST shapes, pixel value range `[0,1]`, label range `{0..9}`, dev-subset seed reproducibility. |
 | `tests/test_models.py` | Each model trains above an accuracy threshold on the full test set (with headroom below what's actually observed, so the test isn't flaky against normal seed variance); `margin_fn` matches a manual per-example computation and is differentiable w.r.t. `x`. |
-| `tests/test_estimators.py` | On `LogisticRegressionModel(num_classes=2)`, `margin_fn` reduces to an exactly linear function with a closed-form Euclidean Lipschitz constant `||w_0-w_1||_2` — all three sub-methods are checked against it (10% tolerance) before being trusted on the MLP/CNN. Also checks the Mahalanobis "P vs. P^-1" dual-norm convention in `gradient_norm_estimate` against an independent closed-form identity. |
+| `tests/test_estimators.py` | On `LogisticRegressionModel(num_classes=2)`, `margin_fn` reduces to an exactly linear function with a closed-form Euclidean Lipschitz constant `||w_0-w_1||_2` — all three sub-methods are checked against it (10% tolerance) before being trusted on the MLP/CNN. Also checks the Mahalanobis "P vs. P^-1" dual-norm convention in `gradient_norm_estimate` against an independent closed-form identity, and `gradient_norm_estimate`'s `embed_fn`-aware pullback-metric path (identity, linear, and `elementwise_embedding` cases, each against an independently computed closed form). |
+| `tests/test_embeddings.py` | `elementwise_embedding`'s identity case, shape, and exact block layout on a hand-checkable example; `make_mahalanobis_distance_fn(..., embed_fn=...)` matches the raw-pixel path exactly at `degree=1`, and leaves existing behavior unchanged when `embed_fn` is left `None`. |
 | `tests/test_distance.py` | As epsilon grows large, `mahalanobis_distance` converges to a constant multiple (`1/sqrt(epsilon)`) of Euclidean distance; real MNIST pixel covariance is confirmed exactly rank-deficient (`cond=inf`) while the ridge-regularized version is well-conditioned. |
-| `tests/test_epsilon_selection.py` | Condition number is (deterministically) non-increasing as epsilon grows; subsample instability does not increase going from a near-singular to a well-regularized epsilon; `select_epsilon`'s bound-matching and fallback logic. |
-| `notebook_mnist_lipschitz.ipynb` | Thin driver notebook — imports from this package, runs `run_mnist_experiment()`, displays every plot with introductory markdown. No reusable logic of its own. |
-| `results/` | Generated outputs (git-ignored except `.gitkeep`): `mnist_experiment_results.json` (scalar summary), `mnist_experiment_arrays.npz` (full per-point local-perturbation/gradient-norm/ratio arrays), and every plot (epsilon sweep, covariance eigenvalues, Euclidean-vs-Mahalanobis comparison, sub-method agreement, ratio distributions, top near-neighbor image pairs). |
+| `tests/test_epsilon_selection.py` | Condition number is (deterministically) non-increasing as epsilon grows; subsample instability does not increase going from a near-singular to a well-regularized epsilon; `select_epsilon`'s bound-matching and fallback logic; `run_embedding_degree_sweep`'s `degree=1` result matches the pre-existing raw-pixel pipeline exactly on an identical pool/model/seed. |
+| `notebook_mnist_lipschitz.ipynb` | Thin driver notebook — imports from this package, runs `run_mnist_experiment()` and (further down) the opt-in `run_embedding_degree_sweep()`, displays every plot and table with introductory markdown. No reusable logic of its own. |
+| `results/` | Generated outputs (git-ignored except `.gitkeep`): `mnist_experiment_results.json` (scalar summary), `mnist_experiment_arrays.npz` (full per-point local-perturbation/gradient-norm/ratio arrays), `embedding_degree_sweep_results.json`/`embedding_degree_sweep_arrays.npz` (the degree-sweep equivalents), and every plot (epsilon sweep, covariance eigenvalues, Euclidean-vs-Mahalanobis comparison, sub-method agreement, ratio distributions, top near-neighbor image pairs, embedding degree sweep). |
 | `data/` | Downloaded MNIST files (git-ignored, ~63MB) — recreated automatically by `load_mnist` on first run. |
 
 ## Design decisions
@@ -165,6 +167,8 @@ and predictions for visual inspection.
 - **The stability check's model is always logistic regression**, regardless of which model the final comparison uses — epsilon selection only needs *a* consistent, cheap-to-evaluate yardstick, not the specific model being analyzed. Unlike the toy experiment's strict "no model involved" `L_hat_data`, there's no model-free scalar function of `x` on MNIST to fall back on.
 - **`select_epsilon` never silently returns a value outside its stated criteria** — if no candidate meets both the condition-number and stability bounds, it falls back to the lowest-cv candidate and prints an explicit warning, rather than picking silently or raising.
 - **Nearest neighbors for the ratio-distribution analysis are always found in raw pixel space**, regardless of `distance_fn` — this keeps "which pairs look similar to a human" a fixed, metric-independent question, so the comparison across Euclidean and Mahalanobis isolates how the *ratio* changes, not also how the neighbor selection changes.
+- **The Mahalanobis metric can be fit over an `embed_fn`-mapped feature space, not just raw pixels.** `make_mahalanobis_distance_fn`, `epsilon_stability_check`, and `gradient_norm_estimate` all take an optional `embed_fn` (e.g. `embeddings.py::elementwise_embedding`); left `None`, every one of them leaves pre-existing raw-pixel behavior exactly unchanged. `gradient_norm_estimate`'s embedded path is the subtle piece: the correct dual norm isn't the raw-pixel Mahalanobis formula reapplied to the embedded gradient, but the *pullback* of the embedded metric through `embed_fn`'s (generally per-point, for nonlinear `embed_fn`) Jacobian, computed via `torch.func.jacrev`/`vmap` rather than a formula hand-derived for one specific embedding — checked against closed-form/manual-Jacobian formulas for the identity, a generic linear map, and `elementwise_embedding` itself in `tests/test_estimators.py`, since there's no MNIST-scale ground truth to check it against otherwise.
+- **`run_embedding_degree_sweep` is self-contained and opt-in, like `toy_lipschitz`'s seed-averaged N-sweep.** It trains its own reference logistic-regression model and loads MNIST fresh unless already-built ones are passed in, and is deliberately not called from `main()` — fitting a precision matrix on the full 60k-point set at `degree=3` (a `(60000, 2352)` SVD) makes it markedly slower than `run_mnist_experiment()` alone.
 
 ## How to run it
 
@@ -174,7 +178,11 @@ and predictions for visual inspection.
 
 .venv/bin/python -c "from mnist_lipschitz.run_experiment import main; main()"
 
-# or execute the notebook end-to-end (~1 minute on CPU)
+# opt-in embedding-degree sweep (not part of main() -- markedly slower, see above)
+.venv/bin/python -c "from mnist_lipschitz.run_experiment import run_embedding_degree_sweep; run_embedding_degree_sweep(degrees=(1, 2, 3))"
+
+# or execute the notebook end-to-end (~1 minute on CPU for run_mnist_experiment();
+# meaningfully longer with the embedding-degree sweep further down included)
 .venv/bin/jupyter nbconvert --to notebook --execute --inplace mnist_lipschitz/notebook_mnist_lipschitz.ipynb
 ```
 
@@ -277,6 +285,30 @@ downweights the very directions raw-pixel nearest neighbors are most
 likely to differ along (the high-variance directions the covariance
 already captures), but this hasn't been checked directly.
 
+**Embedding degree sweep** (`run_embedding_degree_sweep(degrees=(1, 2, 3))`, logistic regression,
+`elementwise_embedding`, epsilon selected on a fixed 3000-point pool, final precision matrix fit
+on the full 60k training set, 1000-point ratio-distribution subset — same setup as the rest of
+this section, repeated once per degree):
+
+| Degree | Selected epsilon | Cond. number at selected epsilon | All-pairs mean | Near-neighbor mean |
+|---|---|---|---|---|
+| 1 (identity) | 0.01 | 508 | 0.146 | 0.111 |
+| 2 | 0.01 | 929 | 0.121 | 0.090 |
+| 3 | 0.01 | 1309 | 0.110 | 0.080 |
+
+Raising the embedding degree **shrinks both ratio-distribution summary statistics
+monotonically** (all-pairs mean and near-neighbor mean both decrease at every step from degree 1
+to 3), while the condition number at the selected epsilon grows roughly in proportion to the
+embedded dimension (`784*degree`) instead — a higher-dimensional embedded space is intrinsically
+harder to condition well, regardless of what the ratio statistics do. **This looks like a pure
+scale effect, not a structural or locality one**: the near-vs-all-pairs reversal already
+established above under plain (degree=1) Mahalanobis distance — near-neighbor pairs have a
+*lower* mean ratio than the general population — **holds at every degree tested**, with a
+comparable relative gap each time (near-neighbor mean is roughly 24-27% below the all-pairs mean
+at all three degrees). Raising the embedding degree changes the ratio's overall scale without
+changing *which* pairs (visually-similar vs. general population) are more or less sensitive
+relative to each other.
+
 ## Limitations and open questions
 
 - **Sub-method disagreement (4-14x) is larger here than in the toy
@@ -300,3 +332,8 @@ already captures), but this hasn't been checked directly.
   dedicated sensitivity sweep the way epsilon was.
 - **Why the ratio-distribution flip (see above) reverses direction
   between Euclidean and Mahalanobis distance is not established.**
+- **The embedding degree sweep only covers logistic regression, only Mahalanobis distance, and
+  only degrees 1-3.** Whether the same monotonic-shrink-plus-stable-reversal pattern holds for
+  the MLP/CNN, under Euclidean distance in the embedded space, or at higher degrees (where
+  condition-number growth may eventually force a much larger selected epsilon, or none of the
+  swept candidates may qualify) hasn't been checked.
