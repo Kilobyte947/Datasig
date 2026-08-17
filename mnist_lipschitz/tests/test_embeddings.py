@@ -5,7 +5,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mnist_lipschitz.embeddings import elementwise_embedding
+from mnist_lipschitz.embeddings import elementwise_embedding, local_patch_cross_terms
 from mnist_lipschitz.distance import svd_ridge_precision, make_mahalanobis_distance_fn
 
 
@@ -57,6 +57,57 @@ def test_embedded_mahalanobis_matches_raw_pixel_at_degree_1():
     x = torch.randn(15, 20)
     y = torch.randn(15, 20)
     assert torch.allclose(raw_distance_fn(x, y), embedded_distance_fn(x, y))
+
+
+def test_local_patch_cross_terms_hand_checkable_small_example():
+    """Hand-checkable example: a 3x3 image, values 1-9 in raster order. Confirms the exact
+    raw-then-4-cross-term-block layout, the correct neighbor for an interior pixel in every
+    direction, and zero-padding at the border (a corner pixel's out-of-bounds directions must be
+    exactly 0, not omitted or wrapped)."""
+    x = torch.tensor([[[1.0, 2.0, 3.0],
+                        [4.0, 5.0, 6.0],
+                        [7.0, 8.0, 9.0]]])  # (1, 3, 3)
+    out = local_patch_cross_terms(x)
+    assert out.shape == (1, 3 * 3 * 5)
+
+    raw, right, down_left, down, down_right = [out[0, 9 * k:9 * (k + 1)].reshape(3, 3) for k in range(5)]
+    assert torch.equal(raw, x[0])
+
+    # Interior pixel (1,1)=5: right=(1,2)=6, down-left=(2,0)=7, down=(2,1)=8, down-right=(2,2)=9.
+    assert right[1, 1] == 5 * 6
+    assert down_left[1, 1] == 5 * 7
+    assert down[1, 1] == 5 * 8
+    assert down_right[1, 1] == 5 * 9
+
+    # Top-left corner (0,0)=1: right=(0,1)=2, down=(1,0)=4, down-right=(1,1)=5, down-left out of bounds -> 0.
+    assert right[0, 0] == 1 * 2
+    assert down[0, 0] == 1 * 4
+    assert down_right[0, 0] == 1 * 5
+    assert down_left[0, 0] == 0.0
+
+    # Bottom-right corner (2,2)=9: every forward direction is out of bounds -> all 0.
+    assert right[2, 2] == 0.0
+    assert down_left[2, 2] == 0.0
+    assert down[2, 2] == 0.0
+    assert down_right[2, 2] == 0.0
+
+
+def test_local_patch_cross_terms_shape_on_mnist_sized_images():
+    torch.manual_seed(4)
+    x = torch.randn(5, 28, 28)
+    out = local_patch_cross_terms(x)
+    assert out.shape == (5, 28 * 28 * 5)
+
+
+def test_local_patch_cross_terms_batch_matches_single_example():
+    """Since gradient_norm_estimate's embed_fn-aware path calls embed_fn on a single flat example
+    at a time (via torch.func.jacrev/vmap), a batched call must agree exactly with calling on each
+    example individually -- no cross-example leakage in the padding/slicing."""
+    torch.manual_seed(5)
+    x = torch.randn(4, 6, 6)
+    batched = local_patch_cross_terms(x)
+    for n in range(4):
+        assert torch.equal(batched[n], local_patch_cross_terms(x[n]))
 
 
 def test_make_mahalanobis_distance_fn_default_embed_fn_none_unchanged():

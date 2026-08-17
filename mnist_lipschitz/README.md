@@ -143,13 +143,13 @@ and predictions for visual inspection.
 | `models.py` | `LogisticRegressionModel`, `SmallMLP`, `SmallCNN`, `FlattenedInputWrapper`, `train_classifier`, `evaluate_accuracy`, `margin_fn`. |
 | `estimators.py` | The three Lipschitz sub-methods (`pairwise_lipschitz`, `local_perturbation_lipschitz`, `gradient_norm_estimate`) plus the ratio-distribution support functions (`pairwise_lipschitz_all`, `ratio_and_components_for_pairs`, `ratio_for_pairs`). Imports `euclidean_distance_fn` from `distance.py` as the default metric. |
 | `distance.py` | Both distance functions (`euclidean_distance_fn`, `mahalanobis_distance`) and the pieces that build a Mahalanobis metric from data: `svd_ridge_precision`, `make_mahalanobis_distance_fn`, `covariance_eigenvalues`, `sweep_epsilon`. All built from the SVD of the raw pixel matrix directly — nothing in this file ever forms the `(784, 784)` covariance matrix explicitly. Pure linear algebra — no dependency on `models.py` or `estimators.py`. |
-| `embeddings.py` | `elementwise_embedding(x_flat, degree)` — maps each pixel through `[x, x**2, ..., x**degree]` independently (no cross-pixel terms), generalizing `toy_lipschitz/embeddings.py`'s polynomial-embedding convention to the 784-pixel setting. `degree=1` is the identity. |
+| `embeddings.py` | `elementwise_embedding(x_flat, degree)` — maps each pixel through `[x, x**2, ..., x**degree]` independently (no cross-pixel terms), generalizing `toy_lipschitz/embeddings.py`'s polynomial-embedding convention to the 784-pixel setting. `degree=1` is the identity. `local_patch_cross_terms(x_image)` — maps each pixel to its raw value plus one cross-term product with each of its immediate 3x3-window spatial neighbors (zero-padded at the border), operating on the actual 28x28 image layout. |
 | `run_experiment.py` | `epsilon_stability_check` and `select_epsilon` (the model-dependent half of epsilon selection), `run_ratio_distribution_analysis`, `run_mnist_experiment` — the main driver that trains all three models, runs all three estimators and the ratio-distribution analysis under Euclidean distance, selects an epsilon, repeats both under Mahalanobis distance, and saves everything to `results/` — and `run_embedding_degree_sweep`, an opt-in (not part of `main()`) driver that repeats epsilon selection and the ratio-distribution analysis once per `elementwise_embedding` degree. |
 | `plots.py` | `MODEL_ORDER`/`MODEL_LABELS` (the single source of truth for model iteration order and display names). `plot_euclidean_vs_mahalanobis`, `plot_epsilon_sweep`, `plot_submethod_agreement`, `plot_covariance_eigenvalues`, `plot_ratio_distribution`, `plot_ratio_distribution_euclidean_vs_mahalanobis`, `plot_image_pairs`, `plot_embedding_degree_sweep`. |
 | `tests/test_data.py` | MNIST shapes, pixel value range `[0,1]`, label range `{0..9}`, dev-subset seed reproducibility. |
 | `tests/test_models.py` | Each model trains above an accuracy threshold on the full test set (with headroom below what's actually observed, so the test isn't flaky against normal seed variance); `margin_fn` matches a manual per-example computation and is differentiable w.r.t. `x`. |
 | `tests/test_estimators.py` | On `LogisticRegressionModel(num_classes=2)`, `margin_fn` reduces to an exactly linear function with a closed-form Euclidean Lipschitz constant `||w_0-w_1||_2` — all three sub-methods are checked against it (10% tolerance) before being trusted on the MLP/CNN. Also checks the Mahalanobis "P vs. P^-1" dual-norm convention in `gradient_norm_estimate` against an independent closed-form identity, and `gradient_norm_estimate`'s `embed_fn`-aware pullback-metric path (identity, linear, and `elementwise_embedding` cases, each against an independently computed closed form). |
-| `tests/test_embeddings.py` | `elementwise_embedding`'s identity case, shape, and exact block layout on a hand-checkable example; `make_mahalanobis_distance_fn(..., embed_fn=...)` matches the raw-pixel path exactly at `degree=1`, and leaves existing behavior unchanged when `embed_fn` is left `None`. |
+| `tests/test_embeddings.py` | `elementwise_embedding`'s identity case, shape, and exact block layout on a hand-checkable example; `make_mahalanobis_distance_fn(..., embed_fn=...)` matches the raw-pixel path exactly at `degree=1`, and leaves existing behavior unchanged when `embed_fn` is left `None`. `local_patch_cross_terms`'s exact neighbor products and border zero-padding on a hand-checkable 3x3 example, output shape, and batch-vs-single-example consistency (relevant since `gradient_norm_estimate` calls `embed_fn` on single examples via `jacrev`/`vmap`). |
 | `tests/test_distance.py` | As epsilon grows large, `mahalanobis_distance` converges to a constant multiple (`1/sqrt(epsilon)`) of Euclidean distance; real MNIST pixel covariance is confirmed exactly rank-deficient (`cond=inf`) while the ridge-regularized version is well-conditioned. |
 | `tests/test_epsilon_selection.py` | Condition number is (deterministically) non-increasing as epsilon grows; subsample instability does not increase going from a near-singular to a well-regularized epsilon; `select_epsilon`'s bound-matching and fallback logic; `run_embedding_degree_sweep`'s `degree=1` result matches the pre-existing raw-pixel pipeline exactly on an identical pool/model/seed. |
 | `notebook_mnist_lipschitz.ipynb` | Thin driver notebook — imports from this package, runs `run_mnist_experiment()` and (further down) the opt-in `run_embedding_degree_sweep()`, displays every plot and table with introductory markdown. No reusable logic of its own. |
@@ -308,6 +308,70 @@ comparable relative gap each time (near-neighbor mean is roughly 24-27% below th
 at all three degrees). Raising the embedding degree changes the ratio's overall scale without
 changing *which* pairs (visually-similar vs. general population) are more or less sensitive
 relative to each other.
+
+**A structurally different embedding: local spatial cross-terms (negative result).**
+`embeddings.py::local_patch_cross_terms(x_image)` was built as a second, deliberately different
+embedding to compare against `elementwise_embedding`: instead of same-pixel powers, it maps each
+pixel to its raw value plus one cross-term product (`x_i * x_j`) with each of its immediate
+spatial neighbors in a 3x3 window (using the actual 28x28 image layout, zero-padded at the
+border), giving a 3920-dimensional embedded space (`784` raw `+ 4*784` cross-terms — each
+unordered adjacent-pixel pair counted once, not twice). It's exercised through the exact same
+`epsilon_stability_check(embed_fn=...)` path as the degree sweep above, with the same 3000-point
+epsilon-selection pool and full-60k final precision matrix.
+
+**Epsilon selection fails categorically for this embedding.** All 7 candidates in the standard
+sweep (`1e-6` through `100`) produced coefficients of variation of **0.91-1.45** — every single
+one an order of magnitude past the `cv<=0.05` stability bound — with mean gradient-norm estimates
+in the billions to trillions. This is not a conditioning failure: at `epsilon=0.01`,
+`cond=1821` alone would have passed the `cond<=1e4` bound; it's specifically the resampling
+*stability* of `gradient_norm_estimate`'s per-point dual norm that never settles, at any
+regularization level tried, including the most heavily regularized candidate (`epsilon=100`,
+`cv=1.25`). `select_epsilon` falls back, with its explicit warning, to `epsilon=1` (lowest cv
+among a set of uniformly bad candidates). This is qualitatively different from
+`elementwise_embedding`, which degrades *gracefully* as degree increases (condition number climbs,
+but the resampling coefficient of variation stays in the same 0.01-0.03 range at every degree
+tested — see the table above).
+
+A working hypothesis, not yet independently verified: `gradient_norm_estimate`'s embedded path
+pulls the metric back through `embed_fn`'s per-point Jacobian (see its docstring). For
+`local_patch_cross_terms`, a cross-term feature's Jacobian entries are literally the *value* of
+the neighboring pixel it's paired with — on MNIST, where most pixels are exactly 0 (background),
+most of a typical query point's cross-term Jacobian rows are near-zero. The aggregate,
+whole-dataset precision matrix doesn't reveal this (it's built from covariance across many points,
+where every pixel takes nonzero values somewhere), but at any *individual* query point the local
+pullback metric can be erratic in a way the aggregate never surfaces — a genuine structural
+property of pairing raw-pixel-value-weighted cross-terms with a mostly-sparse image, not a bug
+(`local_patch_cross_terms` itself is fully unit-tested, including an exact hand-checked
+boundary/zero-padding example, in `tests/test_embeddings.py`).
+
+**The fallback-epsilon ratio-distribution numbers below are not a clean comparison against the
+table above — included for completeness, not as a headline result:**
+
+| | All-pairs mean | Near-neighbor mean |
+|---|---|---|
+| `local_patch_cross_terms` (epsilon=1 fallback, n=300) | 0.288 | 0.246 |
+
+Two caveats apply simultaneously: (1) `epsilon=1` is **100x** the regularization used for every
+other row in this README (`epsilon=0.01`) — per `distance.py`'s own documented property
+(`mahalanobis_distance` converges to scaled Euclidean distance as epsilon grows), this metric
+behaves considerably more like Euclidean distance than a genuine data-fit Mahalanobis metric, and
+(2) the ratio-distribution subset here is 300 points (~44,850 pairs), not the 1000 points
+(~499,500 pairs) used everywhere else in this file — cut after the original 1000-point run
+exhausted this machine's available memory and swap partway through (gathering `embed_fn` over
+hundreds of thousands of pairs at 3920 dimensions has a much larger memory footprint than the
+same step at `elementwise_embedding`'s largest dimension tested, 2352 — a real scaling gap in how
+this embedding was wired into the existing pairwise machinery, left unfixed since this was a
+one-off exploratory comparison, not promoted into the permanent pipeline).
+
+With both caveats in mind: the near-vs-all-pairs reversal still holds direction (near-neighbor
+mean below all-pairs mean, `-14.6%`), consistent with every other Mahalanobis-metric result in
+this file, but the gap is shallower than any of them (`-22%` to `-27%` elsewhere) — plausibly
+because the heavy `epsilon=1` regularization is already pulling this specific comparison partway
+back toward Euclidean-distance territory, where the reversal direction is known to flip entirely
+(Euclidean logistic regression: near-neighbor mean *above* all-pairs mean, see the Euclidean vs.
+Mahalanobis table earlier in this section). Neither `local_patch_cross_terms` nor this comparison
+is wired into `run_experiment.py`, the notebook, or `main()` — it's a completed one-off exploratory
+result, not a permanent part of this experiment's pipeline.
 
 ## Limitations and open questions
 
