@@ -5,6 +5,9 @@ project's ratio-distribution analysis has flagged as high-ratio (large margin sw
 distance) secretly just a mislabeled example, rather than genuine model behavior? No retraining,
 no dataset modification — this only cross-references already-saved index/label data.
 
+A structured version of this table (for programmatic use, e.g. the notebook's
+label-error-cross-reference section) is saved alongside this file as `label_error_crossref.json`.
+
 **Source of known label errors**: `mnist_lipschitz/data/known_label_errors_mnist_test.json`,
 extracted from [cleanlab/label-errors](https://github.com/cleanlab/label-errors) (Apache-2.0) — 15
 confirmed errors out of 100 cleanlab-flagged candidates, each confirmed by majority vote of 5

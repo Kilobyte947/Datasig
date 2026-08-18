@@ -185,7 +185,11 @@ def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, ma
 def plot_image_pairs(pairs, save_path=None):
     """Given a list of image pairs and their associated true/predicted labels and pairwise Lipschitz ratio, plot the first 6 pairs in a grid."""
     n = min(len(pairs), 6)
-    fig, axes = plt.subplots(n, 2, figsize=(5, 2.5 * n))
+    # figsize/dpi chosen for a compact inline notebook rendering (a 6-pair
+    # gallery at the old figsize=(5, 2.5*n) with no explicit dpi ran to
+    # ~15in tall on screen) -- savefig below still writes a crisp dpi=150
+    # PNG regardless of this figure's own (lower) on-screen dpi.
+    fig, axes = plt.subplots(n, 2, figsize=(4, 1.8 * n), dpi=80)
     axes = np.atleast_2d(axes)
 
     for row, (img1, img2, true1, pred1, true2, pred2, ratio, *_rest) in enumerate(pairs[:n]):
@@ -222,7 +226,11 @@ def plot_pair_diagnostic_gallery(pairs, title=None, save_path=None):
     trained-model checkpoint was available to compute them.
     """
     n = len(pairs)
-    fig, axes = plt.subplots(n, 3, figsize=(8, 2.6 * n))
+    # figsize/dpi chosen for a compact inline notebook rendering (a 6-pair
+    # gallery at the old figsize=(8, 2.6*n) with no explicit dpi ran to
+    # ~15.6in tall on screen) -- savefig below still writes a crisp dpi=150
+    # PNG regardless of this figure's own (lower) on-screen dpi.
+    fig, axes = plt.subplots(n, 3, figsize=(6, 1.8 * n), dpi=80)
     axes = np.atleast_2d(axes)
 
     for row, p in enumerate(pairs):

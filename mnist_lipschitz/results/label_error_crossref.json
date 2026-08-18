@@ -1,0 +1,147 @@
+{
+  "description": "Structured companion to label_error_crossref.md -- the pair-by-pair cross-reference of this project's flagged near-neighbor pairs against mnist_lipschitz/data/known_label_errors_mnist_test.json. Indices recovered from already-saved near-neighbor search results (mnist_experiment_arrays.npz, stronger_cnn_raw_mnist_arrays.npz), not recomputed.",
+  "conclusion": "None of the 12 checkable pairs involve a known label error, supporting genuine model behavior over labeling artifacts.",
+  "provenance_note": "The original CNN's '8/2'/'8/0' pairs and logistic regression's '0/7' come from this project's notebook commentary. Cross-referenced against the currently-saved results/mnist_experiment_arrays.npz: '8/2' and '8/0' do exist but rank 47 and 26 (not top pairs), and '0/7' isn't present at all. This suggests that notebook text reflects a different run/subset than what's currently saved in results/, not an error in this cross-reference.",
+  "cnn_rank3_finding": {
+    "description": "The pair that CURRENTLY occupies the original CNN's actual rank-3 highest-ratio near-neighbor slot (Euclidean) -- where the notebook text placed '8/2' -- is a different pair, not one of the pairs named in the original request.",
+    "pair": "6/2",
+    "test_indices": [
+      9679,
+      2200
+    ],
+    "rank_euclidean": 3,
+    "ratio": 2.41,
+    "known_label_error": true,
+    "detail": "Test index 9679 is a confirmed known label error (original_label=6; majority of mTurk workers rejected it, though without a single-label replacement -- 'neither' majority). If the original CNN's near-neighbor results were ever regenerated, its current top-3 pair would be confounded by a known-bad label."
+  },
+  "rows": [
+    {
+      "group": "Original CNN (weaker)",
+      "pair": "6/5",
+      "test_indices": [
+        1014,
+        4529
+      ],
+      "rank_euclidean": 1,
+      "known_label_error": false
+    },
+    {
+      "group": "Original CNN (weaker)",
+      "pair": "8/2",
+      "test_indices": [
+        4117,
+        7205
+      ],
+      "rank_euclidean": 47,
+      "known_label_error": false
+    },
+    {
+      "group": "Original CNN (weaker)",
+      "pair": "8/0",
+      "test_indices": [
+        2272,
+        1333
+      ],
+      "rank_euclidean": 26,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "9/3",
+      "test_indices": [
+        9905,
+        8319
+      ],
+      "rank_euclidean": 65,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "2/4",
+      "test_indices": [
+        1374,
+        3188
+      ],
+      "rank_euclidean": 731,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "0/7",
+      "test_indices": null,
+      "rank_euclidean": null,
+      "known_label_error": null,
+      "note": "not present anywhere in the currently-saved near-neighbor pairs (either metric)"
+    },
+    {
+      "group": "Original MLP",
+      "pair": "2/7",
+      "test_indices": [
+        8295,
+        1581
+      ],
+      "rank_euclidean": 40,
+      "known_label_error": false
+    },
+    {
+      "group": "Original MLP",
+      "pair": "7/1",
+      "test_indices": [
+        1039,
+        3039
+      ],
+      "rank_euclidean": 179,
+      "known_label_error": false
+    },
+    {
+      "group": "Original MLP",
+      "pair": "1/6",
+      "test_indices": [
+        1688,
+        2473
+      ],
+      "rank_euclidean": 431,
+      "known_label_error": false
+    },
+    {
+      "group": "Stronger CNN, raw MNIST",
+      "pair": "9/4 (top pair)",
+      "test_indices": [
+        882,
+        8812
+      ],
+      "rank_euclidean": 1,
+      "known_label_error": false
+    },
+    {
+      "group": "Stronger CNN, raw MNIST",
+      "pair": "1/1 (gallery rank 2)",
+      "test_indices": [
+        9368,
+        2803
+      ],
+      "rank_euclidean": 2,
+      "known_label_error": false
+    },
+    {
+      "group": "Stronger CNN, raw MNIST",
+      "pair": "1/1 (gallery rank 4)",
+      "test_indices": [
+        2803,
+        949
+      ],
+      "rank_euclidean": 4,
+      "known_label_error": false
+    },
+    {
+      "group": "Stronger CNN, raw MNIST",
+      "pair": "1/1 (gallery rank 5)",
+      "test_indices": [
+        2803,
+        1603
+      ],
+      "rank_euclidean": 5,
+      "known_label_error": false
+    }
+  ]
+}
