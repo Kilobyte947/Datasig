@@ -299,12 +299,27 @@ pixel distance is exactly what a mislabeled example would also produce. This was
 against [cleanlab/label-errors](https://github.com/cleanlab/label-errors)'s published,
 human-verified MNIST test-set label corrections (15 confirmed errors out of 10,000 test images) —
 not by retraining or modifying the dataset, purely a cross-reference of already-computed
-near-neighbor pair indices against that published list. **None of the checked flagged pairs — the
-original CNN's, logistic regression's, and MLP's top near-neighbor pairs, plus the higher-capacity
-CNN's own top pair and its high-ratio same-digit "1/1" pairs — involve an image from the
-known-label-errors list.** That supports reading these pairs as genuine model behavior rather than
-labeling artifacts. See `results/label_error_crossref.md` for the full pair-by-pair table and a
-data-provenance caveat about the original CNN's specific pair list.
+near-neighbor pair indices against that published list, across all three original models' top-6
+Euclidean near-neighbor pairs plus the higher-capacity CNN's own top pair and its high-ratio
+same-digit "1/1" pairs (22 pairs checked in total). **21 of the 22 are clean** — including logistic
+regression's top-6, which turn out to be almost entirely the same digit ("1" vs. "1") rather than
+cross-digit confusions, and every one of them checks out clean too. That supports genuine model
+behavior as the general pattern.
+
+**The one exception is itself a positive result, not a caveat.** The original CNN's actual rank-3
+highest-ratio near-neighbor pair (Euclidean) is 6 vs. 2 (test indices 9679 and 2200) — and index
+**9679 is itself one of the 15 confirmed known label errors** (original label "6", rejected by a
+majority of mTurk workers). This is direct, independent evidence that the near-neighbor diagnostic
+can surface genuine *labeling* problems in MNIST's own test set, not just model confusions — the
+same kind of real, interpretable failure this checkpoint's whole design is meant to catch, just
+from an unexpected source. See `results/label_error_crossref.md` for the full pair-by-pair table,
+including a resolved data-provenance issue this cross-reference surfaced along the way: an earlier
+version of this table checked a different set of "documented" pairs for the original CNN and
+logistic regression that turned out to be stale, generated under a since-changed default of
+`run_mnist_experiment`'s `n_lipschitz_points` parameter (300, changed to 1000 the day after that
+documentation was written) — not file corruption or non-determinism, just documentation that never
+got updated after a later, unrelated commit changed an upstream default. `results/label_error_crossref.md`
+has the full diagnosis.
 
 **Embedding degree sweep** (`run_embedding_degree_sweep(degrees=(1, 2, 3))`, logistic regression,
 `elementwise_embedding`, epsilon selected on a fixed 3000-point pool, final precision matrix fit

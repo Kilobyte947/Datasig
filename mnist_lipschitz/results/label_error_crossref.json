@@ -1,18 +1,16 @@
 {
-  "description": "Structured companion to label_error_crossref.md -- the pair-by-pair cross-reference of this project's flagged near-neighbor pairs against mnist_lipschitz/data/known_label_errors_mnist_test.json. Indices recovered from already-saved near-neighbor search results (mnist_experiment_arrays.npz, stronger_cnn_raw_mnist_arrays.npz), not recomputed.",
-  "conclusion": "None of the 12 checkable pairs involve a known label error, supporting genuine model behavior over labeling artifacts.",
-  "provenance_note": "The original CNN's '8/2'/'8/0' pairs and logistic regression's '0/7' come from this project's notebook commentary. Cross-referenced against the currently-saved results/mnist_experiment_arrays.npz: '8/2' and '8/0' do exist but rank 47 and 26 (not top pairs), and '0/7' isn't present at all. This suggests that notebook text reflects a different run/subset than what's currently saved in results/, not an error in this cross-reference.",
-  "cnn_rank3_finding": {
-    "description": "The pair that CURRENTLY occupies the original CNN's actual rank-3 highest-ratio near-neighbor slot (Euclidean) -- where the notebook text placed '8/2' -- is a different pair, not one of the pairs named in the original request.",
-    "pair": "6/2",
-    "test_indices": [
-      9679,
-      2200
-    ],
-    "rank_euclidean": 3,
-    "ratio": 2.41,
-    "known_label_error": true,
-    "detail": "Test index 9679 is a confirmed known label error (original_label=6; majority of mTurk workers rejected it, though without a single-label replacement -- 'neither' majority). If the original CNN's near-neighbor results were ever regenerated, its current top-3 pair would be confounded by a known-bad label."
+  "description": "Structured companion to label_error_crossref.md -- the pair-by-pair cross-reference of this project's flagged near-neighbor pairs against mnist_lipschitz/data/known_label_errors_mnist_test.json. Indices recovered from already-saved near-neighbor search results (mnist_experiment_arrays.npz, stronger_cnn_raw_mnist_arrays.npz). REVISED from the original version of this file: the original-CNN/logistic-regression rows previously listed pairs ('8/2', '8/0', '0/7') that turned out to be stale -- generated under an earlier default of run_mnist_experiment's n_lipschitz_points parameter (300, before commit 48bd088 changed it to 1000). Rows below reflect the current, reproducible top-6 Euclidean near-neighbor pairs for each of the three original models. See root_cause_of_prior_mismatch below for the full diagnosis.",
+  "conclusion": "Of all 22 checked pairs across all four model/run groups, only one involves a known label error: the original CNN's current rank-3 pair (test index 9679). Every other pair -- including all of logistic regression's top pairs, which are almost entirely same-digit '1/1' pairs -- is clean, supporting genuine model behavior over labeling artifacts as the general pattern, with one confirmed exception.",
+  "root_cause_of_prior_mismatch": {
+    "summary": "The original CNN's '8/2'/'8/0' pairs and logistic regression's '0/7' (previously documented in this notebook's 'Highest-ratio near-neighbour pairs' section) were generated when run_mnist_experiment's n_lipschitz_points defaulted to 300 (commit 4db5ae9, 2026-08-12). Commit 48bd088, the very next day (2026-08-13, 'Add covariance eigenvalue spectrum plot to mnist_lipschitz'), changed that default to 1000. n_lipschitz_points sizes query_idx (the Lipschitz-estimator query set), which is passed as exclude_idx to the ratio-distribution analysis's stratified near-neighbor subset draw -- so even with an identical seed, a different exclude_idx produces a different subset, hence different near-neighbor pairs. Model training itself is unaffected and remains bit-for-bit reproducible (accuracy numbers from reruns during this investigation matched README.md's documented table exactly to 4 decimal places) -- only the near-neighbor subset composition shifted. Confirmed via git log -S on run_experiment.py and cross-checked by rerunning run_mnist_experiment() with current code, seed=0: results matched the currently-saved results/mnist_experiment_arrays.npz exactly, not the notebook's old prose. This is genuine stale documentation from an earlier code state, not file corruption or non-determinism.",
+    "changed_in_commit": "48bd088",
+    "changed_from": 300,
+    "changed_to": 1000,
+    "affected_pairs_retired": [
+      "8/2 (original CNN)",
+      "8/0 (original CNN)",
+      "0/7 (original logistic regression)"
+    ]
   },
   "rows": [
     {
@@ -27,80 +25,172 @@
     },
     {
       "group": "Original CNN (weaker)",
-      "pair": "8/2",
+      "pair": "4/9",
       "test_indices": [
-        4117,
-        7205
+        8812,
+        882
       ],
-      "rank_euclidean": 47,
+      "rank_euclidean": 2,
       "known_label_error": false
     },
     {
       "group": "Original CNN (weaker)",
+      "pair": "2/6",
+      "test_indices": [
+        2200,
+        9679
+      ],
+      "rank_euclidean": 3,
+      "known_label_error": true
+    },
+    {
+      "group": "Original CNN (weaker)",
+      "pair": "8/5",
+      "test_indices": [
+        3559,
+        2413
+      ],
+      "rank_euclidean": 4,
+      "known_label_error": false
+    },
+    {
+      "group": "Original CNN (weaker)",
+      "pair": "2/0",
+      "test_indices": [
+        2098,
+        4527
+      ],
+      "rank_euclidean": 5,
+      "known_label_error": false
+    },
+    {
+      "group": "Original CNN (weaker)",
+      "pair": "6/6",
+      "test_indices": [
+        6847,
+        9529
+      ],
+      "rank_euclidean": 6,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "1/1",
+      "test_indices": [
+        5642,
+        2359
+      ],
+      "rank_euclidean": 1,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "1/1",
+      "test_indices": [
+        5642,
+        749
+      ],
+      "rank_euclidean": 2,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "1/1",
+      "test_indices": [
+        5642,
+        3253
+      ],
+      "rank_euclidean": 3,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "5/1",
+      "test_indices": [
+        4577,
+        5642
+      ],
+      "rank_euclidean": 4,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "1/1",
+      "test_indices": [
+        5642,
+        4308
+      ],
+      "rank_euclidean": 5,
+      "known_label_error": false
+    },
+    {
+      "group": "Original logistic regression",
+      "pair": "3/3",
+      "test_indices": [
+        5955,
+        1069
+      ],
+      "rank_euclidean": 6,
+      "known_label_error": false
+    },
+    {
+      "group": "Original MLP",
+      "pair": "2/3",
+      "test_indices": [
+        5381,
+        7821
+      ],
+      "rank_euclidean": 1,
+      "known_label_error": false
+    },
+    {
+      "group": "Original MLP",
+      "pair": "6/5",
+      "test_indices": [
+        1014,
+        4529
+      ],
+      "rank_euclidean": 2,
+      "known_label_error": false
+    },
+    {
+      "group": "Original MLP",
+      "pair": "3/3",
+      "test_indices": [
+        4430,
+        3943
+      ],
+      "rank_euclidean": 3,
+      "known_label_error": false
+    },
+    {
+      "group": "Original MLP",
       "pair": "8/0",
       "test_indices": [
         2272,
         1333
       ],
-      "rank_euclidean": 26,
-      "known_label_error": false
-    },
-    {
-      "group": "Original logistic regression",
-      "pair": "9/3",
-      "test_indices": [
-        9905,
-        8319
-      ],
-      "rank_euclidean": 65,
-      "known_label_error": false
-    },
-    {
-      "group": "Original logistic regression",
-      "pair": "2/4",
-      "test_indices": [
-        1374,
-        3188
-      ],
-      "rank_euclidean": 731,
-      "known_label_error": false
-    },
-    {
-      "group": "Original logistic regression",
-      "pair": "0/7",
-      "test_indices": null,
-      "rank_euclidean": null,
-      "known_label_error": null,
-      "note": "not present anywhere in the currently-saved near-neighbor pairs (either metric)"
-    },
-    {
-      "group": "Original MLP",
-      "pair": "2/7",
-      "test_indices": [
-        8295,
-        1581
-      ],
-      "rank_euclidean": 40,
+      "rank_euclidean": 4,
       "known_label_error": false
     },
     {
       "group": "Original MLP",
-      "pair": "7/1",
+      "pair": "3/8",
       "test_indices": [
-        1039,
-        3039
+        5955,
+        1613
       ],
-      "rank_euclidean": 179,
+      "rank_euclidean": 5,
       "known_label_error": false
     },
     {
       "group": "Original MLP",
-      "pair": "1/6",
+      "pair": "1/1",
       "test_indices": [
-        1688,
-        2473
+        5642,
+        749
       ],
-      "rank_euclidean": 431,
+      "rank_euclidean": 6,
       "known_label_error": false
     },
     {
