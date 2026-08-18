@@ -292,6 +292,20 @@ downweights the very directions raw-pixel nearest neighbors are most
 likely to differ along (the high-variance directions the covariance
 already captures), but this hasn't been checked directly.
 
+**Validity check: are the flagged near-neighbor pairs just mislabeled examples?** A natural
+objection to treating a high-ratio near-neighbor pair as evidence of real model sensitivity is
+that it might instead just be one image with a wrong label — a large margin swing for a small
+pixel distance is exactly what a mislabeled example would also produce. This was checked directly
+against [cleanlab/label-errors](https://github.com/cleanlab/label-errors)'s published,
+human-verified MNIST test-set label corrections (15 confirmed errors out of 10,000 test images) —
+not by retraining or modifying the dataset, purely a cross-reference of already-computed
+near-neighbor pair indices against that published list. **None of the checked flagged pairs — the
+original CNN's, logistic regression's, and MLP's top near-neighbor pairs, plus the higher-capacity
+CNN's own top pair and its high-ratio same-digit "1/1" pairs — involve an image from the
+known-label-errors list.** That supports reading these pairs as genuine model behavior rather than
+labeling artifacts. See `results/label_error_crossref.md` for the full pair-by-pair table and a
+data-provenance caveat about the original CNN's specific pair list.
+
 **Embedding degree sweep** (`run_embedding_degree_sweep(degrees=(1, 2, 3))`, logistic regression,
 `elementwise_embedding`, epsilon selected on a fixed 3000-point pool, final precision matrix fit
 on the full 60k training set, 1000-point ratio-distribution subset — same setup as the rest of

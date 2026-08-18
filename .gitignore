@@ -10,4 +10,5 @@ toy_lipschitz/results/*
 
 mnist_lipschitz/results/*
 !mnist_lipschitz/results/.gitkeep
-mnist_lipschitz/data/
+mnist_lipschitz/data/*
+!mnist_lipschitz/data/known_label_errors_mnist_test.json

@@ -1,0 +1,182 @@
+{
+  "source": "https://github.com/cleanlab/label-errors (Apache-2.0)",
+  "source_files": [
+    "mturk/mnist_mturk.json",
+    "original_test_labels/mnist_test_set_original_labels.npy",
+    "cross_validated_predicted_labels/mnist_test_set_pyx_argmax_predicted_labels.npy"
+  ],
+  "description": "MNIST test-set label errors confirmed via cleanlab confident-learning (cleanlab v1.0) candidate flagging followed by 5-worker Amazon Mechanical Turk human verification. Indices are index-aligned to the standard 10,000-image torchvision MNIST test set (cross-checked directly against original_test_labels.npy at each id, exact match, no reindexing needed).",
+  "methodology": "Of the 100 candidate examples cleanlab flagged for mturk review, an example is counted here as a confirmed label error if a majority of the 5 mturk workers rejected the original (\"given\") label -- i.e. votes against the given label (\"guessed\" + \"neither\", or just \"guessed\" when the given and cleanlab-guessed labels coincide) outnumber votes for it. This reproduces exactly 15 confirmed errors out of the 100 reviewed candidates. \"corrected_label\" is cleanlab's guessed label when that was itself the majority choice; null (see \"note\") for the 3 cases where \"neither\" label won a plurality -- the original label is still confirmed wrong in those cases, just without a single verified replacement.",
+  "n_candidates_reviewed": 100,
+  "n_confirmed_errors": 15,
+  "errors": [
+    {
+      "index": 947,
+      "original_label": 8,
+      "cleanlab_predicted_label": 9,
+      "corrected_label": 9,
+      "mturk_votes": {
+        "given": 0,
+        "guessed": 5,
+        "neither": 0
+      }
+    },
+    {
+      "index": 1621,
+      "original_label": 0,
+      "cleanlab_predicted_label": 6,
+      "corrected_label": 6,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 3,
+        "neither": 0
+      }
+    },
+    {
+      "index": 1901,
+      "original_label": 9,
+      "cleanlab_predicted_label": 4,
+      "corrected_label": 4,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 3,
+        "neither": 0
+      }
+    },
+    {
+      "index": 2130,
+      "original_label": 4,
+      "cleanlab_predicted_label": 9,
+      "corrected_label": 9,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 2,
+        "neither": 1
+      }
+    },
+    {
+      "index": 2462,
+      "original_label": 2,
+      "cleanlab_predicted_label": 0,
+      "corrected_label": 0,
+      "mturk_votes": {
+        "given": 0,
+        "guessed": 4,
+        "neither": 1
+      }
+    },
+    {
+      "index": 2597,
+      "original_label": 5,
+      "cleanlab_predicted_label": 3,
+      "corrected_label": 3,
+      "mturk_votes": {
+        "given": 0,
+        "guessed": 4,
+        "neither": 1
+      }
+    },
+    {
+      "index": 2654,
+      "original_label": 6,
+      "cleanlab_predicted_label": 1,
+      "corrected_label": null,
+      "mturk_votes": {
+        "given": 0,
+        "guessed": 2,
+        "neither": 3
+      },
+      "note": "majority of the 5 mturk workers rejected BOTH the original label and cleanlab's guessed correction ('neither') -- no single human-verified replacement label is available from this source, only confirmation that the original label is wrong"
+    },
+    {
+      "index": 3520,
+      "original_label": 6,
+      "cleanlab_predicted_label": 4,
+      "corrected_label": null,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 0,
+        "neither": 3
+      },
+      "note": "majority of the 5 mturk workers rejected BOTH the original label and cleanlab's guessed correction ('neither') -- no single human-verified replacement label is available from this source, only confirmation that the original label is wrong"
+    },
+    {
+      "index": 3558,
+      "original_label": 5,
+      "cleanlab_predicted_label": 0,
+      "corrected_label": 0,
+      "mturk_votes": {
+        "given": 1,
+        "guessed": 4,
+        "neither": 0
+      }
+    },
+    {
+      "index": 5937,
+      "original_label": 5,
+      "cleanlab_predicted_label": 3,
+      "corrected_label": 3,
+      "mturk_votes": {
+        "given": 1,
+        "guessed": 3,
+        "neither": 1
+      }
+    },
+    {
+      "index": 6651,
+      "original_label": 0,
+      "cleanlab_predicted_label": 6,
+      "corrected_label": 6,
+      "mturk_votes": {
+        "given": 0,
+        "guessed": 5,
+        "neither": 0
+      }
+    },
+    {
+      "index": 6783,
+      "original_label": 1,
+      "cleanlab_predicted_label": 6,
+      "corrected_label": 6,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 3,
+        "neither": 0
+      }
+    },
+    {
+      "index": 8527,
+      "original_label": 4,
+      "cleanlab_predicted_label": 9,
+      "corrected_label": 9,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 2,
+        "neither": 1
+      }
+    },
+    {
+      "index": 9679,
+      "original_label": 6,
+      "cleanlab_predicted_label": 3,
+      "corrected_label": null,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 0,
+        "neither": 3
+      },
+      "note": "majority of the 5 mturk workers rejected BOTH the original label and cleanlab's guessed correction ('neither') -- no single human-verified replacement label is available from this source, only confirmation that the original label is wrong"
+    },
+    {
+      "index": 9729,
+      "original_label": 5,
+      "cleanlab_predicted_label": 6,
+      "corrected_label": 6,
+      "mturk_votes": {
+        "given": 2,
+        "guessed": 3,
+        "neither": 0
+      }
+    }
+  ]
+}
