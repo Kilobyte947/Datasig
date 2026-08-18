@@ -321,6 +321,29 @@ documentation was written) — not file corruption or non-determinism, just docu
 got updated after a later, unrelated commit changed an upstream default. `results/label_error_crossref.md`
 has the full diagnosis.
 
+**Visual sanity check on logistic regression's same-digit pairs**: the same check already run on
+the higher-capacity CNN's "1/1" pairs, now run on logistic regression's top-6 (`plot_pair_diagnostic_gallery`,
+`results/pair_diagnostic_lr_top6.png`, images + predictions + a pixel-level difference panel per
+pair). Structurally, a data indexing bug pairing a point with itself or a corrupted duplicate
+already couldn't have produced these ratios at all — `estimators.py`'s ratio computation zeroes any
+pair with `dist<=1e-12` — but that's checked visually here too, not just assumed. **Genuine, not an
+artifact**: every pair is two visibly distinct handwriting samples (different slant, stroke width,
+and in one recurring image a stray extra mark), every pairwise distance is comfortably nonzero
+(6.3-7.9 in raw pixel space), and every difference panel shows real, spatially-concentrated
+structure along the actual strokes, not a near-blank frame. The *mechanism* turns out to be
+different from the CNN's case, though, and more classical: in every one of the 6 pairs, one member
+is **misclassified** by logistic regression (a "1" predicted "5", or a "3" predicted "8") while its
+near-neighbor of the same true digit is correctly classified — five of the six pairs share one
+specific image (test index 5642, a "1" with a small stray mark) as their misclassified member,
+consistently predicted "5" everywhere it appears. This is a point sitting at or past a genuine LR
+decision boundary, with a same-digit neighbor sitting clearly on the correct side — the large
+margin swing is close to definitionally expected there, not a surprising finding on its own. What
+*is* still a genuine confirmation is that the near-neighbor search reliably finds these
+boundary-straddling pairs at all, rather than something degenerate — a second, independent
+confirmation (alongside the CNN's own "1/1" result, which involved two *correctly and confidently*
+classified points instead) that this diagnostic surfaces real within-class decision-boundary
+sensitivity, via two different underlying mechanisms, not a coincidence specific to one model.
+
 **Embedding degree sweep** (`run_embedding_degree_sweep(degrees=(1, 2, 3))`, logistic regression,
 `elementwise_embedding`, epsilon selected on a fixed 3000-point pool, final precision matrix fit
 on the full 60k training set, 1000-point ratio-distribution subset — same setup as the rest of
