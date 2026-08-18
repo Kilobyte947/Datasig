@@ -51,11 +51,16 @@ test-set indices were recovered from the already-saved near-neighbor search resu
 | Stronger CNN, raw MNIST | 5 | 1/1 | 2803, 1603 | No |
 
 Notable pattern, not part of the original request but visible directly in the table above:
-logistic regression's top-6 pairs are almost entirely the *same* digit ("1" vs. "1", five of six
-rows, four of them sharing test index 5642 as one member) rather than cross-digit confusions —
-closer to the "same-digit, surprisingly-high-ratio" pattern documented for the stronger CNN's "1/1"
-pairs elsewhere in this project than to the cross-digit-confusion story this section originally
-told for all three models.
+logistic regression's top-6 pairs are almost entirely the *same* digit (5 of 6 rows: four "1" vs.
+"1" and one "3" vs. "3") rather than cross-digit confusions — closer to the "same-digit,
+surprisingly-high-ratio" pattern documented for the stronger CNN's "1/1" pairs elsewhere in this
+project than to the cross-digit-confusion story this section originally told for all three models.
+Rank 4 ("5/1") is the one exception — a genuine cross-digit pair, not same-digit at all. **One
+recurring point, not five or six independent findings**: test index 5642 is a member of 5 of these
+6 pairs (ranks 1-5, i.e. every row except rank 6) — the same boundary-sitting image compared
+against five different neighbors, not five separate discoveries. See the visual-check writeup in
+`README.md`'s "Validity check" section for the full per-pair assessment
+(`pair_diagnostic_lr_top6.png`).
 
 ## Conclusion
 

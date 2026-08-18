@@ -330,19 +330,30 @@ pair with `dist<=1e-12` — but that's checked visually here too, not just assum
 artifact**: every pair is two visibly distinct handwriting samples (different slant, stroke width,
 and in one recurring image a stray extra mark), every pairwise distance is comfortably nonzero
 (6.3-7.9 in raw pixel space), and every difference panel shows real, spatially-concentrated
-structure along the actual strokes, not a near-blank frame. The *mechanism* turns out to be
-different from the CNN's case, though, and more classical: in every one of the 6 pairs, one member
-is **misclassified** by logistic regression (a "1" predicted "5", or a "3" predicted "8") while its
-near-neighbor of the same true digit is correctly classified — five of the six pairs share one
-specific image (test index 5642, a "1" with a small stray mark) as their misclassified member,
-consistently predicted "5" everywhere it appears. This is a point sitting at or past a genuine LR
-decision boundary, with a same-digit neighbor sitting clearly on the correct side — the large
-margin swing is close to definitionally expected there, not a surprising finding on its own. What
-*is* still a genuine confirmation is that the near-neighbor search reliably finds these
-boundary-straddling pairs at all, rather than something degenerate — a second, independent
-confirmation (alongside the CNN's own "1/1" result, which involved two *correctly and confidently*
-classified points instead) that this diagnostic surfaces real within-class decision-boundary
-sensitivity, via two different underlying mechanisms, not a coincidence specific to one model.
+structure along the actual strokes, not a near-blank frame.
+
+**One recurring point, not six independent findings**: test index 5642 (a "1" with a small stray
+mark, consistently misclassified as "5") is a member of **5 of the 6 pairs** — ranks 1, 2, 3, 4,
+and 5. This top-6 is really one boundary-sitting image being compared against five different
+neighbors, not five or six separate discoveries; only rank 6 (a 3/3 pair, test indices 5955/1069)
+doesn't involve it.
+
+The *mechanism* is also different from the CNN's case, and more classical — but it does **not**
+apply uniformly to all 6 pairs. In 5 of the 6 (ranks 1, 2, 3, 5, and 6), one member is
+**misclassified** by logistic regression (idx 5642 as "5" in four of them; idx 1069, true "3", as
+"8" in rank 6) while its near-neighbor of the *same true digit* is classified correctly. **Rank 4
+is not a same-digit pair at all** — it's a genuine "5" (idx 4577, correctly classified) next to idx
+5642 (true "1", misclassified) — a cross-digit pair that landed in this list because both happen to
+be predicted "5", not because the two images share a true label. Restricting to the 5 genuinely
+same-digit pairs: each is a point sitting at or past a real LR decision boundary, next to a
+same-digit neighbor sitting clearly on the correct side — a large margin swing is close to
+definitionally expected there, not a surprising finding on its own. What's still a genuine
+confirmation is that the near-neighbor search reliably finds these boundary-straddling pairs at
+all — but given how much of this top-6 traces back to one recurring image, this is closer to *one*
+clear confirmation than several, alongside the CNN's own "1/1" result (a different mechanism: two
+correctly and confidently classified points) — still evidence this diagnostic surfaces real
+within-class decision-boundary sensitivity via more than one model and more than one mechanism, not
+a one-model coincidence, but not five or six independent instances of it either.
 
 **Embedding degree sweep** (`run_embedding_degree_sweep(degrees=(1, 2, 3))`, logistic regression,
 `elementwise_embedding`, epsilon selected on a fixed 3000-point pool, final precision matrix fit
