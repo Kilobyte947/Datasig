@@ -380,6 +380,27 @@ Mahalanobis table earlier in this section). Neither `local_patch_cross_terms` no
 is wired into `run_experiment.py`, the notebook, or `main()` — it's a completed one-off exploratory
 result, not a permanent part of this experiment's pipeline.
 
+**Follow-up: does plain Euclidean distance on this embedding show a locality signal on its own,
+without any covariance-based reweighting?** Yes — closing the open question of whether the
+epsilon-selection instability above was a property of the embedding itself or specifically of the
+covariance reweighting. Applying `euclidean_distance_fn` directly to `local_patch_cross_terms`-embedded
+features (no covariance, precision, or epsilon anywhere) on the same logistic-regression setup,
+near-neighbor pairs still sit above the all-pairs mean (all-pairs mean 0.165, near-neighbor mean
+0.171, `+3.9%`) — the same direction as raw-pixel Euclidean distance's own locality signal — so the
+embedding is locally informative on its own, and the earlier instability was specifically a
+Mahalanobis/covariance-reweighting problem, not a defect of the embedding. That said, the signal is
+markedly weaker than raw pixels' own Euclidean result (`+13%` for logistic regression, see the
+Euclidean-vs-Mahalanobis ratio-distribution table earlier in this section), so this embedding
+doesn't add value over raw pixels under Euclidean distance either. And even the heavily-damped
+`epsilon=1` Mahalanobis fallback above — already noted as behaving considerably more like Euclidean
+distance than a genuine data-fit metric — still reverses the near/all sign relative to true
+Euclidean distance on the same features (`-14.6%` vs. `+3.9%`), which generalizes this project's
+"self-referential covariance reweighting shrinks/reverses the signal" finding beyond just
+full-strength or numerically unstable Mahalanobis: even a weak, near-Euclidean one flips it. Run as
+a one-off scratch script, same exploratory status as the rest of this section — see
+`results/local_patch_cross_terms_euclidean_followup.md` for the full setup, comparison table, and a
+reproducible snippet.
+
 ## Limitations and open questions
 
 - **Sub-method disagreement (4-14x) is larger here than in the toy
