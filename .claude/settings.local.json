@@ -46,7 +46,23 @@
       "Bash(git pull *)",
       "Bash(git checkout *)",
       "Bash(grep -rn *)",
-      "Bash(.venv/bin/python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['mnist_lipschitz/estimators.py','mnist_lipschitz/models.py','mnist_lipschitz/plots.py','mnist_lipschitz/layer_decomposition.py','mnist_lipschitz/data.py','mnist_lipschitz/distance.py','mnist_lipschitz/run_experiment.py']]; print\\('syntax ok'\\)\")"
+      "Bash(.venv/bin/python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['mnist_lipschitz/estimators.py','mnist_lipschitz/models.py','mnist_lipschitz/plots.py','mnist_lipschitz/layer_decomposition.py','mnist_lipschitz/data.py','mnist_lipschitz/distance.py','mnist_lipschitz/run_experiment.py']]; print\\('syntax ok'\\)\")",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/test_attacks.py -v)",
+      "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('mnist_lipschitz/adversarial/run_experiment.py'\\).read\\(\\)\\); print\\('syntax ok'\\)\")",
+      "Bash(timeout 180 .venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/ -v)",
+      "Bash(.venv/bin/python -m pytest toy_lipschitz/tests/ mnist_lipschitz/tests/ mnist_lipschitz/adversarial/tests/ -q)",
+      "Bash(echo \"started with PID $!\")",
+      "Bash(ps -p 42205 -o pid,etime,command)",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/build_adv_notebook.py\")",
+      "Bash(nohup .venv/bin/jupyter nbconvert --to notebook --execute --inplace mnist_lipschitz/adversarial/notebook_adversarial_lipschitz.ipynb)",
+      "Bash(echo \"started PID $!\")",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook.py\")",
+      "Bash(rm -rf mnist_lipschitz/adversarial/.ipynb_checkpoints)",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook2.py\")",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook3.py\")",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook4.py\")",
+      "Bash(git stash *)"
     ]
   }
 }
