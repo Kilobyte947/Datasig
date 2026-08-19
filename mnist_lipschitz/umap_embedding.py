@@ -94,6 +94,26 @@ def fit_umap_embedding(x_flat, n_components=5, seed=SEED, n_neighbors=15, min_di
     confirmed directly to give bit-identical embeddings across repeated
     fits with the same seed and data (`tests/test_umap_embedding.py`).
 
+    **Fit/evaluate separation is the caller's responsibility, and matters**:
+    this function fits on exactly whatever `x_flat` it's given -- nothing
+    here prevents a caller from fitting on the same points a downstream
+    ratio-distribution analysis then evaluates, which would let the
+    embedding "see" the evaluation points during its own optimization
+    (UMAP's fit directly shapes where each fit-time point lands) before
+    supposedly-held-out distances are measured on them. Verified directly
+    (not just assumed) that `notebook_umap.ipynb` avoids this: `dev`, the
+    subset passed here, is drawn from `data.py::load_mnist(train=True)`;
+    every downstream evaluation -- the Step 2 validation subset, the Step
+    3 ratio-distribution analysis, and the `min_dist` sweep -- operates on
+    `load_mnist(train=False)`-derived subsets exclusively, reached only via
+    `make_umap_embed_fn`/`make_umap_euclidean_distance_fn`'s `.transform()`
+    calls, never by fitting a second reducer on evaluation data. Train and
+    test are MNIST's own disjoint splits, so this is genuine held-out
+    evaluation, not a different subset of the same pool. A future caller
+    fitting this on data it also means to evaluate distances on downstream
+    would reintroduce exactly this leakage risk -- keep the fit subset and
+    every evaluation subset on opposite sides of the train/test split.
+
     Returns the fitted `umap.UMAP` object -- has `.transform()` for
     embedding new/held-out points without refitting (see
     `make_umap_embed_fn` below).

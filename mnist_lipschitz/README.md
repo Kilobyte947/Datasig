@@ -491,6 +491,13 @@ real model sensitivity, checked three independent ways:
    (9.09), which UMAP nonetheless placed at distance 0.043 — a confirmed embedding-compression
    error, not a discovered similarity.
 
+**Fit/evaluate separation was checked directly, not assumed**: the fitted UMAP embedding is fit
+once on a training-set dev subset and only ever evaluated via `.transform()` on test-set-derived
+subsets (the validation check, the ratio-distribution analysis, and the `min_dist` sweep) — never
+refit on evaluation data. Confirmed by reading every call site in `umap_embedding.py` and
+`notebook_umap.ipynb`, not by assumption; see `fit_umap_embedding`'s docstring for the checked
+invariant.
+
 See `notebook_umap.ipynb`'s "Verdict: artifact" section for the full investigation, numbers, and
 image evidence. Separately: this sub-experiment uses **unsupervised** UMAP only — whether
 supervised UMAP (using class labels during fitting) was the intended variant is an open question
