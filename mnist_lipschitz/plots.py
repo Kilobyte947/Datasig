@@ -262,6 +262,39 @@ def plot_pair_diagnostic_gallery(pairs, title=None, save_path=None):
     return fig
 
 
+def plot_umap_embedding_scatter(embedded_2d, labels, title=None, save_path=None):
+    """2D scatter of a UMAP embedding, colored by true digit label -- the
+    validation check `notebook_umap.ipynb` runs before trusting UMAP as a
+    distance metric: visible per-digit clustering supports treating
+    embedded-space distance as locality-preserving, a scattered/mixed
+    result means don't trust it further.
+
+    `embedded_2d`: (N, 2) array/tensor -- a genuinely 2D UMAP fit for
+    visualization, not just the first two columns of a higher-dimensional
+    embedding (UMAP's output dimensions aren't ordered by variance the way
+    PCA's are, so slicing would be a misleading substitute for an actual
+    2D fit -- see `umap_embedding.py`/`notebook_umap.ipynb` for this
+    choice). `labels`: (N,) integer digit labels, same order.
+    """
+    embedded_2d = embedded_2d.detach().cpu().numpy() if hasattr(embedded_2d, "detach") else np.asarray(embedded_2d)
+    labels = labels.detach().cpu().numpy() if hasattr(labels, "detach") else np.asarray(labels)
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    cmap = plt.get_cmap("tab10")
+    for digit in range(10):
+        mask = labels == digit
+        ax.scatter(embedded_2d[mask, 0], embedded_2d[mask, 1], s=8, alpha=0.7,
+                   color=cmap(digit), label=str(digit))
+
+    ax.set_xlabel("UMAP dim 1")
+    ax.set_ylabel("UMAP dim 2")
+    ax.set_title(title or "UMAP embedding, colored by true digit label")
+    ax.legend(title="digit", fontsize=8, markerscale=2, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
 def plot_layer_decomposition_sweep(df, save_path=None):
     """`L_head` (exact + estimated), `L_extractor`, `product`
     (`L_extractor_estimated * L_head_exact`), and `L_full` as a function of
