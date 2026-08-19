@@ -464,6 +464,38 @@ a one-off scratch script, same exploratory status as the rest of this section �
 `results/local_patch_cross_terms_euclidean_followup.md` for the full setup, comparison table, and a
 reproducible snippet.
 
+## Sub-experiment: UMAP as an alternative distance metric (verdict: artifact, not a real signal)
+
+`umap_embedding.py`/`notebook_umap.ipynb` (a dedicated module + thin driver notebook, same
+convention as the layer-decomposition sub-experiment) tried a *learned* distance metric instead of
+a hand-built one: fit an unsupervised UMAP embedding, then measure plain Euclidean distance in the
+embedded space. The embedding itself passes validation as label-informative (`knn_label_purity`
+0.79 against a 0.10 chance baseline, visible per-digit clustering). But the resulting
+ratio-distribution number — near-neighbor pairs scoring **5.7x** the all-pairs mean for logistic
+regression, vastly more than raw-pixel Euclidean's own +13% — does **not** hold up as evidence of
+real model sensitivity, checked three independent ways:
+
+1. **The margin-difference numerator isn't elevated at all** for near-neighbor pairs (33.6%
+   *smaller* than the general population, confirmed identical whether measured against UMAP or
+   raw-pixel Euclidean distance on the exact same pairs, since margin difference depends only on
+   the model, never on the distance metric). The entire elevation comes from the denominator: UMAP
+   compresses near-neighbor distances by 83.6%, versus only ~40% under raw-pixel Euclidean on
+   those same pairs.
+2. **A `min_dist` sweep** (the UMAP parameter controlling how aggressively already-close points
+   get packed together) shows the elevation shrinking smoothly and monotonically — 5.67x -> 4.11x
+   -> 3.33x -> 2.79x -> 2.59x as compression relaxes — while embedding quality stays essentially
+   flat. A genuine model-sensitivity signal would not track a metric hyperparameter unrelated to
+   the model.
+3. **The single most extreme outlier** (`all_pairs_max` = 290.6) is a directly-inspected pair: a
+   true "2" and a true "0", visually distinct digits with an unremarkable raw-pixel distance
+   (9.09), which UMAP nonetheless placed at distance 0.043 — a confirmed embedding-compression
+   error, not a discovered similarity.
+
+See `notebook_umap.ipynb`'s "Verdict: artifact" section for the full investigation, numbers, and
+image evidence. Separately: this sub-experiment uses **unsupervised** UMAP only — whether
+supervised UMAP (using class labels during fitting) was the intended variant is an open question
+for Nick/Terry, not decided here.
+
 ## Limitations and open questions
 
 - **Sub-method disagreement (4-14x) is larger here than in the toy

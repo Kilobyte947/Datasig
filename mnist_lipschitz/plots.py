@@ -391,3 +391,45 @@ def plot_embedding_degree_sweep(degree_results, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_umap_mindist_sweep(sweep_rows, save_path=None):
+    """UMAP `min_dist` sweep (`notebook_umap.ipynb`'s artifact-vs-signal
+    follow-up investigation): validation quality (`knn_label_purity`, left)
+    and the ratio-distribution near/all elevation (right), both against
+    `min_dist` -- the two-panel view that makes the sweep's headline finding
+    directly visible: near/all shrinks smoothly toward (but not fully to)
+    the raw-pixel Euclidean baseline as compression is relaxed (higher
+    `min_dist`), while embedding quality stays roughly stable -- the same
+    per-digit clustering quality can coexist with very different amounts of
+    ratio inflation, which is itself evidence the inflation is a metric
+    property, not a property of the model being measured.
+
+    `sweep_rows`: list of dicts, each with `min_dist`, `knn_label_purity`,
+    and `near_over_all` keys (matches the sweep this project's own
+    investigation script/notebook cell builds).
+    """
+    min_dists = [r["min_dist"] for r in sweep_rows]
+    purities = [r["knn_label_purity"] for r in sweep_rows]
+    near_over_all = [r["near_over_all"] for r in sweep_rows]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(min_dists, purities, marker="o", color="tab:blue")
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xlabel("min_dist")
+    ax1.set_ylabel("knn_label_purity (k=5)")
+    ax1.set_title("Validation quality vs. min_dist")
+    ax1.legend(fontsize=8)
+
+    ax2.plot(min_dists, near_over_all, marker="s", color="tab:orange", label="UMAP near/all")
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xlabel("min_dist")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation vs. min_dist")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("UMAP min_dist sweep: does relaxing compression shrink the near/all elevation?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
