@@ -16,15 +16,23 @@ from mnist_lipschitz.plots import _maybe_save
 METHOD_COLORS = {"FGSM": "tab:blue", "PGD": "tab:orange"}
 
 
-def plot_R_adv_distribution(sweep_results, L_full_estimated, product_bound, save_path=None):
+def plot_R_adv_distribution(sweep_results, L_full_estimated, product_bound,
+                             metric_name="Euclidean", save_path=None):
     """Per-epsilon distribution of the achieved sensitivity ratio R_adv, FGSM vs. PGD side by
     side (box plots, one pair of boxes per epsilon), against the two Lipschitz bounds
-    `run_bound_comparison` computed for this same checkpoint: `L_full_estimated` (tight) and
-    `product_bound` (loose), each a horizontal reference line -- the same "measured distribution
-    vs. a theoretical reference value" layout used throughout this project's other plots.
+    `run_bound_comparison`/`run_bound_comparison_with_distance_fn` computed for this same
+    checkpoint: `L_full_estimated` (tight) and `product_bound` (loose), each a horizontal
+    reference line -- the same "measured distribution vs. a theoretical reference value" layout
+    used throughout this project's other plots.
 
     `sweep_results`: `run_experiment.run_epsilon_sweep`'s return value (specifically its
     `"per_case"` dict, keyed by `(epsilon, method) -> {"R_adv": Tensor, ...}`).
+
+    `metric_name` (default `"Euclidean"`, matching `mnist_lipschitz.plots.plot_ratio_distribution`'s
+    own parameter of the same name) only affects the title/axis wording -- pass `"Mahalanobis"`
+    when `sweep_results` was computed with a Mahalanobis `distance_fn` (see
+    `run_experiment.build_pixel_mahalanobis_distance_fn`), so the plot doesn't mislabel the
+    distance actually used in the denominator.
     """
     per_case = sweep_results["per_case"]
     epsilons = sorted({eps for eps, _method in per_case.keys()})
@@ -51,15 +59,16 @@ def plot_R_adv_distribution(sweep_results, L_full_estimated, product_bound, save
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{e:g}" for e in epsilons])
     ax.set_xlabel("epsilon (L_inf attack budget)")
-    ax.set_ylabel("R_adv = ||f(x) - f(x_adv)||_2 / ||x - x_adv||_2")
-    ax.set_title("Achieved adversarial sensitivity vs. the layer-decomposition Lipschitz bounds")
+    ax.set_ylabel(f"R_adv = ||f(x) - f(x_adv)||_2 / {metric_name.lower()}_distance(x, x_adv)")
+    ax.set_title(f"Achieved adversarial sensitivity vs. the layer-decomposition Lipschitz bounds "
+                 f"({metric_name} distance)")
     ax.legend(fontsize=8)
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
 
 
-def plot_bound_closeness_vs_width(combined_df, save_path=None):
+def plot_bound_closeness_vs_width(combined_df, metric_name="Euclidean", save_path=None):
     """Two-panel summary across the CNN-width sweep (mirrors
     `mnist_lipschitz.plots.plot_layer_decomposition_sweep`'s two-panel layout for the same width
     axis): left panel is `max_R_adv / L_full_estimated` (the tight bound) vs. width, with a
@@ -70,9 +79,13 @@ def plot_bound_closeness_vs_width(combined_df, save_path=None):
     without a reference line, since the loose bound is not itself guaranteed to be approached
     the same way.
 
-    `combined_df`: `run_experiment.run_cnn_adversarial_width_sweep`'s combined (one-row-per-width)
-    DataFrame -- needs `width`, `ratio_to_L_full_fgsm`/`_pgd`, and
-    `ratio_to_product_bound_fgsm`/`_pgd` columns.
+    `combined_df`: `run_experiment.run_cnn_adversarial_width_sweep`'s (or
+    `run_cnn_adversarial_width_sweep_with_distance_fn`'s) combined (one-row-per-width) DataFrame
+    -- needs `width`, `ratio_to_L_full_fgsm`/`_pgd`, and `ratio_to_product_bound_fgsm`/`_pgd`
+    columns.
+
+    `metric_name` (default `"Euclidean"`) only affects the suptitle wording -- pass
+    `"Mahalanobis"` when `combined_df` came from a Mahalanobis-`distance_fn` width sweep.
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
@@ -95,34 +108,45 @@ def plot_bound_closeness_vs_width(combined_df, save_path=None):
     ax2.set_title("Closeness to the loose bound (product) vs. width")
     ax2.legend(fontsize=8)
 
-    fig.suptitle("Adversarial achieved sensitivity vs. capacity: closeness to the Lipschitz bounds")
+    fig.suptitle(f"Adversarial achieved sensitivity vs. capacity: closeness to the Lipschitz "
+                 f"bounds ({metric_name} distance)")
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
 
 
-def plot_extreme_examples(most_sensitive, least_sensitive, width=None, save_path=None):
+def plot_extreme_examples(most_sensitive, least_sensitive, width=None, metric_name="Euclidean",
+                           save_path=None):
     """Visualizes the two examples from `run_experiment.most_and_least_sensitive_examples`: the
     single attacked point that achieved the LARGEST R_adv (top row) and the single one that
     achieved the SMALLEST R_adv (bottom row) for one checkpoint. Each row shows the clean image,
     the adversarial image, and their pixel-space absolute difference, labeled with the true
     class, the model's prediction on each, and the epsilon/method/R_adv that produced it.
 
-    The left column gets an x-axis label with `pixel_distance` (`||x - x_adv||_2`, the INITIAL
-    Euclidean distance in raw pixel space, before either image reaches the extractor) if present
-    on the example dict. If `head_layer_bound_check`'s keys (`feature_distance`, `L_head_exact`,
-    `head_bound`, `actual_logit_distance`, `head_bound_tightness`) are also present (merged in by
-    `run_cnn_adversarial_width_sweep`), the middle column gets an x-axis label comparing the
-    Euclidean distance between the two extracted-feature vectors (right after the pixel-space
-    distance shown on the left, right before the head) against the head layer's own exact
-    Lipschitz bound on how far that distance can push the logits -- together the two labels trace
-    the full pixel -> feature -> logit distance chain for this one example. Both are omitted
-    gracefully (no crash) if a caller passes examples without that extra info.
+    The left column gets an x-axis label with `pixel_distance` (`distance_fn(x, x_adv)` --
+    `||x - x_adv||_2` if Euclidean, whatever `distance_fn` was passed to
+    `most_and_least_sensitive_examples` otherwise -- the INITIAL distance in raw pixel space,
+    before either image reaches the extractor) if present on the example dict. If
+    `head_layer_bound_check`'s keys (`feature_distance`, `L_head_exact`, `head_bound`,
+    `actual_logit_distance`, `head_bound_tightness`) are also present (merged in by
+    `run_cnn_adversarial_width_sweep`/`run_cnn_adversarial_width_sweep_with_distance_fn`), the
+    middle column gets an x-axis label comparing the Euclidean distance between the two
+    extracted-feature vectors (right after the pixel-space distance shown on the left, right
+    before the head -- ALWAYS Euclidean regardless of `metric_name`, see
+    `run_experiment.compute_bounds_with_distance_fn`'s docstring for why) against the head
+    layer's own exact Lipschitz bound on how far that distance can push the logits -- together
+    the two labels trace the full pixel -> feature -> logit distance chain for this one example.
+    Both are omitted gracefully (no crash) if a caller passes examples without that extra info.
 
     `most_sensitive`/`least_sensitive`: dicts with at least the keys
     `most_and_least_sensitive_examples` returns (`x`, `x_adv`, `y_true`, `pred_clean`,
     `pred_adv`, `epsilon`, `method`, `R_adv`) -- no model call happens here, purely display of
     already-computed values, matching this module's other plotting functions.
+
+    `metric_name` (default `"Euclidean"`) only affects the title wording -- pass `"Mahalanobis"`
+    when these examples came from a Mahalanobis-`distance_fn` sweep, so the (always-Euclidean)
+    `feature_distance` label in the middle column isn't confused with the (metric-dependent)
+    `pixel_distance` label on the left.
     """
     fig, axes = plt.subplots(2, 3, figsize=(9, 7.5))
 
@@ -155,11 +179,96 @@ def plot_extreme_examples(most_sensitive, least_sensitive, width=None, save_path
                 f"head_bound={example['head_bound']:.3f}  actual={example['actual_logit_distance']:.3f} "
                 f"({example['head_bound_tightness']:.1%} of bound)", fontsize=7)
 
-    title = "Most/least sensitive attacked example"
+    title = f"Most/least sensitive attacked example ({metric_name} distance)"
     if width is not None:
-        title += f" (width={width})"
+        title += f", width={width}"
     fig.suptitle(title)
     fig.tight_layout()
     fig.subplots_adjust(hspace=0.6, top=0.90)
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_euclidean_vs_mahalanobis_R_adv(euclidean_summary_df, mahalanobis_summary_df,
+                                         stat="mean_R_adv", save_path=None):
+    """Grouped-bar comparison of an R_adv summary statistic (default `mean_R_adv`) across the
+    epsilon sweep, Euclidean vs. Mahalanobis distance, one panel per attack method (FGSM/PGD) --
+    mirrors `mnist_lipschitz.plots.plot_euclidean_vs_mahalanobis`'s own grouped-bar-per-submethod
+    convention (`tab:blue`=Euclidean, `tab:orange`=Mahalanobis), applied here to this
+    sub-experiment's `(epsilon, method)` summary tables instead of that module's three
+    Lipschitz-estimator sub-methods.
+
+    `euclidean_summary_df`/`mahalanobis_summary_df`: `summarize_epsilon_sweep`'s per-(epsilon,
+    method) tables (from `run_bound_comparison`/`run_bound_comparison_with_distance_fn`
+    respectively) for the SAME checkpoint -- must share the same set of epsilons for the grouped
+    bars to line up meaningfully.
+    `stat`: which summary column to plot (`"mean_R_adv"`, `"median_R_adv"`, or `"max_R_adv"`).
+    """
+    methods = ("FGSM", "PGD")
+    fig, axes = plt.subplots(1, len(methods), figsize=(7 * len(methods), 5))
+
+    for ax, method in zip(axes, methods):
+        eucl = euclidean_summary_df[euclidean_summary_df["method"] == method].sort_values("epsilon")
+        maha = mahalanobis_summary_df[mahalanobis_summary_df["method"] == method].sort_values("epsilon")
+        epsilons = eucl["epsilon"].tolist()
+        x = range(len(epsilons))
+        width = 0.35
+
+        ax.bar([xi - width / 2 for xi in x], eucl[stat], width, label="Euclidean", color="tab:blue")
+        ax.bar([xi + width / 2 for xi in x], maha[stat], width, label="Mahalanobis", color="tab:orange")
+        ax.set_xticks(list(x))
+        ax.set_xticklabels([f"{e:g}" for e in epsilons])
+        ax.set_xlabel("epsilon (L_inf attack budget)")
+        ax.set_ylabel(stat)
+        ax.set_title(method)
+        ax.legend(fontsize=8)
+
+    fig.suptitle(f"Achieved adversarial sensitivity ({stat}): Euclidean vs. Mahalanobis distance")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_euclidean_vs_mahalanobis_bounds_vs_width(euclidean_combined_df, mahalanobis_combined_df,
+                                                    save_path=None):
+    """Extends `plot_bound_closeness_vs_width`'s two-panel (tight bound / loose bound) layout with
+    a second dimension: solid lines for Euclidean, dashed for Mahalanobis (the same
+    solid/dashed-for-a-second-dimension convention `mnist_lipschitz.plots.plot_layer_decomposition_
+    sweep` uses for exact-vs-estimated), so the SAME question `plot_bound_closeness_vs_width` asks
+    per metric ("does the gap between achieved sensitivity and the theoretical bound narrow or
+    widen with capacity?") can be compared directly ACROSS metrics on one pair of axes.
+
+    `euclidean_combined_df`/`mahalanobis_combined_df`: `run_cnn_adversarial_width_sweep`'s and
+    `run_cnn_adversarial_width_sweep_with_distance_fn`'s combined (one-row-per-width) DataFrames
+    respectively, for the SAME widths/checkpoints -- both need `width`, `ratio_to_L_full_fgsm`/
+    `_pgd`, and `ratio_to_product_bound_fgsm`/`_pgd` columns.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    ax1.axhline(1.0, color="black", linestyle="--", label="ratio=1", linewidth=1)
+    for df, metric_label, linestyle in ((euclidean_combined_df, "Euclidean", "-"),
+                                         (mahalanobis_combined_df, "Mahalanobis", "--")):
+        ax1.plot(df["width"], df["ratio_to_L_full_fgsm"], marker="o", color=METHOD_COLORS["FGSM"],
+                  linestyle=linestyle, label=f"FGSM ({metric_label})")
+        ax1.plot(df["width"], df["ratio_to_L_full_pgd"], marker="s", color=METHOD_COLORS["PGD"],
+                  linestyle=linestyle, label=f"PGD ({metric_label})")
+    ax1.set_xlabel("CNN width")
+    ax1.set_ylabel("max_R_adv / L_full_estimated")
+    ax1.set_title("Closeness to the tight bound (L_full) vs. width")
+    ax1.legend(fontsize=7)
+
+    for df, metric_label, linestyle in ((euclidean_combined_df, "Euclidean", "-"),
+                                         (mahalanobis_combined_df, "Mahalanobis", "--")):
+        ax2.plot(df["width"], df["ratio_to_product_bound_fgsm"], marker="o", color=METHOD_COLORS["FGSM"],
+                  linestyle=linestyle, label=f"FGSM ({metric_label})")
+        ax2.plot(df["width"], df["ratio_to_product_bound_pgd"], marker="s", color=METHOD_COLORS["PGD"],
+                  linestyle=linestyle, label=f"PGD ({metric_label})")
+    ax2.set_xlabel("CNN width")
+    ax2.set_ylabel("max_R_adv / product_bound")
+    ax2.set_title("Closeness to the loose bound (product) vs. width")
+    ax2.legend(fontsize=7)
+
+    fig.suptitle("Adversarial achieved sensitivity vs. capacity: Euclidean vs. Mahalanobis distance")
+    fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
