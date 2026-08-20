@@ -272,3 +272,174 @@ def plot_euclidean_vs_mahalanobis_bounds_vs_width(euclidean_combined_df, mahalan
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Multi-seed confirmation sweep (seed_sweep.py, Checkpoint 5) -- all four functions below consume
+# seed_sweep.summarize_seed_sweep's/run_seed_sweep's DataFrames, not this module's single-seed
+# sweep_results/summary_df/combined_df, and all accept `metric_name` for title/axis wording,
+# matching every other plotting function in this file.
+# ---------------------------------------------------------------------------
+
+WIDTH_COLORS = {16: "tab:blue", 32: "tab:orange", 64: "tab:green"}
+
+
+def plot_misclassification_vs_width_with_spread(per_config_df, metric_name="Euclidean", save_path=None):
+    """THE PRIMARY FIGURE for the multi-seed sweep: whether the single-seed width-32/width-64
+    misclassification-rate inversion (see seed_sweep.py's top docstring) survives reseeding is
+    read directly off this plot -- misclassification rate vs. width, one line per epsilon, error
+    bars = std across seeds (`seed_sweep.summarize_seed_sweep`'s `per_config` table).
+
+    One panel per attack method (FGSM/PGD, mirroring `plot_euclidean_vs_mahalanobis_R_adv`'s own
+    one-panel-per-method convention), one color line per epsilon within each panel (a
+    `viridis`-sampled color per epsilon, since epsilon is a continuous sweep axis, unlike the
+    fixed two-way FGSM/PGD or Euclidean/Mahalanobis choices `METHOD_COLORS` covers elsewhere in
+    this file).
+
+    `per_config_df`: `seed_sweep.summarize_seed_sweep(...)["per_config"]`, needs `width`,
+    `epsilon`, `method`, `metric`, `misclassification_rate_mean`, `misclassification_rate_std`
+    columns -- filtered here to `metric_name` (only one metric plotted per call, matching every
+    other single-metric plot in this file; call twice for Euclidean and Mahalanobis and compare
+    side by side, same convention as `plot_R_adv_distribution`).
+    """
+    sub = per_config_df[per_config_df["metric"] == metric_name]
+    methods = [m for m in ("FGSM", "PGD") if m in sub["method"].unique()]
+    epsilons = sorted(sub["epsilon"].unique())
+    cmap = plt.get_cmap("viridis")
+
+    fig, axes = plt.subplots(1, len(methods), figsize=(7 * len(methods), 5), squeeze=False)
+    axes = axes[0]
+
+    for ax, method in zip(axes, methods):
+        method_sub = sub[sub["method"] == method]
+        for i, epsilon in enumerate(epsilons):
+            eps_sub = method_sub[method_sub["epsilon"] == epsilon].sort_values("width")
+            color = cmap(i / max(len(epsilons) - 1, 1))
+            ax.errorbar(eps_sub["width"], eps_sub["misclassification_rate_mean"],
+                        yerr=eps_sub["misclassification_rate_std"], marker="o", capsize=3,
+                        color=color, label=f"epsilon={epsilon:g}")
+        ax.set_xlabel("CNN width")
+        ax.set_ylabel("misclassification_rate (mean +/- std across seeds)")
+        ax.set_title(method)
+        ax.legend(fontsize=8)
+
+    fig.suptitle(f"Misclassification rate vs. width, across seeds ({metric_name} distance)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_L_full_vs_misclassification(df, metric_name="Euclidean", save_path=None):
+    """Scatter of `L_full_estimated` against `misclassification_rate`, points colored by width,
+    every `(seed, epsilon, method)` row shown individually (not aggregated) -- if the two
+    quantities are decoupled (a wider network having a larger `L_full_estimated` doesn't imply a
+    higher achieved misclassification rate, or vice versa), this shows it directly as a lack of
+    any visible trend within/across the width color groups, rather than requiring a separate
+    correlation coefficient.
+
+    `df`: `seed_sweep.run_seed_sweep`'s raw long-format frame (or any subset of it with the same
+    columns) -- needs `width`, `metric`, `L_full_estimated`, `misclassification_rate`. Filtered
+    here to `metric_name`.
+    """
+    sub = df[df["metric"] == metric_name]
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+
+    for width in sorted(sub["width"].unique()):
+        width_sub = sub[sub["width"] == width]
+        ax.scatter(width_sub["misclassification_rate"], width_sub["L_full_estimated"],
+                   color=WIDTH_COLORS.get(width, "tab:gray"), alpha=0.6, label=f"width={width}")
+
+    ax.set_xlabel("misclassification_rate")
+    ax.set_ylabel("L_full_estimated")
+    ax.set_title(f"L_full_estimated vs. achieved misclassification rate, all seeds ({metric_name} distance)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_margin_vs_full_lipschitz(df, metric_name="Euclidean", save_path=None):
+    """Scatter of `L_margin_estimated` (the SCALAR margin functional's own Lipschitz constant,
+    `run_experiment.margin_lipschitz_estimate` -- this project's main robustness measure
+    everywhere outside `layer_decomposition.py`) against `L_full_estimated` (the full-logit-vector
+    Lipschitz constant this sub-experiment's bounds are built from), one point per `(seed, width)`,
+    colored by width -- tests whether the margin functional tracks the observed vulnerability
+    (`plot_L_full_vs_misclassification`) any better than the full-logit quantity does. The two are
+    DIFFERENT functions' Lipschitz constants (see `margin_lipschitz_estimate`'s docstring) and are
+    never averaged together here, only plotted against each other.
+
+    `df`: `seed_sweep.run_seed_sweep`'s raw frame -- needs `seed`, `width`, `metric`,
+    `L_margin_estimated`, `L_full_estimated`. De-duplicated to one row per `(seed, width)` first
+    (both quantities are checkpoint-level, i.e. constant across a checkpoint's `(epsilon, method)`
+    rows -- see `run_single_seed_width`'s docstring -- so plotting every row would only overplot
+    identical points on top of each other, not add information).
+    """
+    sub = df[df["metric"] == metric_name].drop_duplicates(subset=["seed", "width"])
+    fig, ax = plt.subplots(figsize=(6.5, 6))
+
+    lims = [
+        min(sub["L_margin_estimated"].min(), sub["L_full_estimated"].min()),
+        max(sub["L_margin_estimated"].max(), sub["L_full_estimated"].max()),
+    ]
+    ax.plot(lims, lims, color="black", linestyle="--", linewidth=1, label="L_margin = L_full")
+
+    for width in sorted(sub["width"].unique()):
+        width_sub = sub[sub["width"] == width]
+        ax.scatter(width_sub["L_full_estimated"], width_sub["L_margin_estimated"],
+                   color=WIDTH_COLORS.get(width, "tab:gray"), s=60, label=f"width={width}")
+
+    ax.set_xlabel("L_full_estimated (full logit vector)")
+    ax.set_ylabel("L_margin_estimated (scalar margin functional)")
+    ax.set_title(f"Margin-functional vs. full-logit Lipschitz constant, per (seed, width) "
+                 f"({metric_name} distance)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_bound_closeness_vs_width_with_spread(per_config_df, epsilon=None, metric_name="Euclidean",
+                                                save_path=None):
+    """Error-bar version of `plot_bound_closeness_vs_width`: same two-panel (tight bound / loose
+    bound) layout and `ratio=1` reference line, but width vs. mean +/- std across seeds (from
+    `seed_sweep.summarize_seed_sweep`'s `per_config` table) instead of a single-seed point per
+    width.
+
+    `per_config_df`: needs `width`, `epsilon`, `method`, `metric`, `ratio_to_L_full_mean`,
+    `ratio_to_L_full_std`, `ratio_to_product_bound_mean`, `ratio_to_product_bound_std`.
+    `epsilon`: which epsilon's rows to plot (defaults to the LARGEST epsilon present, matching
+    `run_cnn_adversarial_width_sweep`'s own "evaluated at the largest swept epsilon" convention --
+    see that function's docstring for why).
+    """
+    sub = per_config_df[per_config_df["metric"] == metric_name]
+    if epsilon is None:
+        epsilon = sub["epsilon"].max()
+    sub = sub[sub["epsilon"] == epsilon]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    ax1.axhline(1.0, color="black", linestyle="--", label="L_full_estimated (ratio=1)")
+    for method, marker in (("FGSM", "o"), ("PGD", "s")):
+        method_sub = sub[sub["method"] == method].sort_values("width")
+        ax1.errorbar(method_sub["width"], method_sub["ratio_to_L_full_mean"],
+                     yerr=method_sub["ratio_to_L_full_std"], marker=marker, capsize=3,
+                     color=METHOD_COLORS[method], label=method)
+        ax2.errorbar(method_sub["width"], method_sub["ratio_to_product_bound_mean"],
+                     yerr=method_sub["ratio_to_product_bound_std"], marker=marker, capsize=3,
+                     color=METHOD_COLORS[method], label=method)
+
+    ax1.set_xlabel("CNN width")
+    ax1.set_ylabel("max_R_adv / L_full_estimated (mean +/- std across seeds)")
+    ax1.set_title("Closeness to the tight bound (L_full) vs. width")
+    ax1.legend(fontsize=8)
+
+    ax2.set_xlabel("CNN width")
+    ax2.set_ylabel("max_R_adv / product_bound (mean +/- std across seeds)")
+    ax2.set_title("Closeness to the loose bound (product) vs. width")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle(f"Adversarial achieved sensitivity vs. capacity, across seeds "
+                 f"(epsilon={epsilon:g}, {metric_name} distance)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

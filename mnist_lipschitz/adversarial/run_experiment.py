@@ -42,14 +42,21 @@ import pandas as pd
 import torch
 
 from mnist_lipschitz.data import load_mnist, get_dev_subset, make_loader
-from mnist_lipschitz.models import SmallCNN, FlattenedInputWrapper, train_classifier
-from mnist_lipschitz.estimators import linear_layer_lipschitz, pairwise_lipschitz, euclidean_distance_fn
+from mnist_lipschitz.models import SmallCNN, FlattenedInputWrapper, train_classifier, margin_fn
+from mnist_lipschitz.estimators import (
+    linear_layer_lipschitz,
+    pairwise_lipschitz,
+    local_perturbation_lipschitz,
+    gradient_norm_estimate,
+    euclidean_distance_fn,
+)
 from mnist_lipschitz.distance import svd_ridge_precision, make_mahalanobis_distance_fn
 from mnist_lipschitz.layer_decomposition import (
     layer_decomposition_experiment,
     extractor_output_fn,
     full_logits_output_fn,
     fit_feature_normalizer,
+    METHODS,
     # The next two are underscore-prefixed ("module-private") in layer_decomposition.py, but
     # imported here deliberately: compute_bounds_with_distance_fn below needs to reproduce that
     # module's own normalize_features=True feature-standardization logic EXACTLY (see its
@@ -394,6 +401,161 @@ def head_layer_bound_check(model, example):
         "head_bound": head_bound,
         "actual_logit_distance": actual_logit_distance,
         "head_bound_tightness": tightness,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-run measurement helpers for the multi-seed confirmation sweep (seed_sweep.py).
+#
+# The single-seed width sweep (run_cnn_adversarial_width_sweep) found width=64 achieving a higher
+# L_full_estimated than width=32 while width=32 shows a HIGHER misclassification_rate at matched
+# epsilon -- an apparent inversion. These four functions capture the diagnostics needed to tell
+# which of three candidate mechanisms explains it (logit scale, margin-functional Lipschitz
+# constant, or attack-direction alignment), independent of whether the inversion itself survives
+# reseeding (seed_sweep.py checks that separately). Each is standalone and does not alter any
+# existing call path in this module.
+# ---------------------------------------------------------------------------
+
+def adversarial_accuracy(model, x, x_adv, y):
+    """Clean/adversarial accuracy and flip-rate diagnostics for one attacked batch.
+
+    `x`/`y` are assumed already restricted to the correctly-classified pool (see
+    `filter_correctly_classified` -- every other function in this module makes the same
+    assumption about its evaluation points), so `clean_acc` is 1.0 by construction here; the
+    informative quantity is `adv_acc`/`misclassification_rate`, the post-attack flip rate.
+
+    `model`: FlattenedInputWrapper-wrapped (flat (N, 784) input), matching this module's
+    convention throughout. `x`/`x_adv`: flat (N, 784). `y`: (N,) true labels.
+
+    Returns {"clean_acc", "adv_acc", "misclassification_rate", "n_flipped", "n_evaluated"}.
+    """
+    with torch.no_grad():
+        pred_clean = model(x).argmax(dim=1)
+        pred_adv = model(x_adv).argmax(dim=1)
+    n = y.shape[0]
+    n_flipped = (pred_adv != y).sum().item()
+    return {
+        "clean_acc": (pred_clean == y).float().mean().item(),
+        "adv_acc": 1.0 - n_flipped / n,
+        "misclassification_rate": n_flipped / n,
+        "n_flipped": n_flipped,
+        "n_evaluated": n,
+    }
+
+
+def clean_logit_stats(model, x):
+    """Distribution of the CLEAN model's logit-vector norm and top-2 margin over `x` -- the
+    "logit scale" mechanism candidate: a network whose clean logits are simply larger in
+    magnitude, or more confidently separated between its top two classes, could show a
+    smaller/larger flip rate at fixed attack epsilon independent of its Lipschitz constant.
+
+    `model`: FlattenedInputWrapper-wrapped. `x`: flat (N, 784) pixel input -- no `y` needed, this
+    is purely a property of the clean model's own output distribution, not of correctness.
+
+    `top2_margin` here is the gap between the two LARGEST logits (top-1 minus runner-up, by logit
+    value) -- NOT `models.margin_fn`'s true-class-vs-runner-up margin, since no label is
+    used/relevant here (on a correctly-classified pool the two coincide, but this function itself
+    never assumes that).
+
+    Returns {"mean_logit_norm", "std_logit_norm", "mean_top2_margin", "std_top2_margin",
+    "p5_top2_margin", "p10_top2_margin"} (the last two: 5th/10th percentiles of top2_margin).
+    """
+    with torch.no_grad():
+        logits = model(x)
+    logit_norm = logits.norm(p=2, dim=-1)
+    top2 = logits.topk(2, dim=-1).values
+    margin = top2[:, 0] - top2[:, 1]
+    return {
+        "mean_logit_norm": logit_norm.mean().item(),
+        "std_logit_norm": logit_norm.std().item(),
+        "mean_top2_margin": margin.mean().item(),
+        "std_top2_margin": margin.std().item(),
+        "p5_top2_margin": margin.quantile(0.05).item(),
+        "p10_top2_margin": margin.quantile(0.10).item(),
+    }
+
+
+def margin_lipschitz_estimate(model, x, y, estimator="pairwise", distance_fn=euclidean_distance_fn,
+                               max_pairs=None, radius=1.0, n_directions=40, seed=0):
+    """Empirical Lipschitz constant of the SCALAR margin functional (`models.margin_fn`,
+    `logit[y_true] - max(logit[j], j != y_true)`) -- this project's main robustness measure
+    everywhere OUTSIDE `layer_decomposition.py`/this module's own bound machinery (see this
+    module's top docstring for the two-different-"L_full" caveat). Reuses `estimators.py`'s
+    existing three sub-methods rather than reimplementing margin estimation here.
+
+    `estimator`: one of `layer_decomposition.METHODS` (`"pairwise"`, `"grid"`, `"gradient"`) --
+    dispatched exactly as `layer_decomposition_experiment` dispatches for `L_head_estimated`/
+    `L_extractor_estimated` (`"grid"`/`"gradient"` return a per-point array; the scalar estimate
+    returned here is that array's max, matching `layer_decomposition_experiment`'s own
+    convention).
+
+    `model`: FlattenedInputWrapper-wrapped -- `margin_fn` calls `model(x)` directly on flat
+    (N, 784) input, matching every other call site of `margin_fn` in this project.
+
+    **Must be reported under its own name (`L_margin_estimated`) wherever used alongside
+    `L_full_estimated` in downstream tables/plots -- the two measure Lipschitz constants of
+    DIFFERENT functions (scalar margin vs. full logit vector) and must never be merged into one
+    "Lipschitz" column.**
+
+    Returns a single float.
+    """
+    if estimator not in METHODS:
+        raise ValueError(f"unknown estimator {estimator!r}, expected one of {METHODS}")
+    if estimator == "pairwise":
+        L_hat, _, _ = pairwise_lipschitz(model, x, y, margin_fn, distance_fn=distance_fn,
+                                          max_pairs=max_pairs, seed=seed)
+        return L_hat
+    elif estimator == "grid":
+        return local_perturbation_lipschitz(
+            model, x, y, margin_fn, distance_fn=distance_fn,
+            radius=radius, n_directions=n_directions, seed=seed).max().item()
+    else:  # "gradient"
+        return gradient_norm_estimate(model, x, y, margin_fn).max().item()
+
+
+def flip_direction_alignment(model, x, x_adv, y):
+    """For each attacked point, how well does the FULL logit-vector movement `dz = f(x_adv)-f(x)`
+    align with the direction that would flip the label toward the clean runner-up class -- the
+    "direction alignment" mechanism candidate: even at a fixed logit-movement magnitude, an
+    attack that happens to move mostly along `e_k - e_y` (k = the clean runner-up) is far more
+    effective at actually flipping the prediction than one that moves an equal amount in some
+    other direction.
+
+    `k` (the runner-up class) is defined exactly as `models.margin_fn` defines it: the class with
+    the second-highest logit at the CLEAN input `x` (`argmax_{j != y} logits(x)[j]`) -- the same
+    runner-up `margin_fn`'s Lipschitz constant governs.
+
+    `cos(dz, e_k - e_y) = (dz_k - dz_y) / (||dz||_2 * ||e_k - e_y||_2)`, sign chosen (via this
+    formula directly, no separate sign flip needed) so that POSITIVE means the movement pushes
+    logit_k up relative to logit_y -- i.e. aligned with flipping the prediction from y to k -- and
+    NEGATIVE means it pushes the other way. Points where `dz` is (numerically) exactly zero get
+    cosine 0, not a division-by-zero NaN.
+
+    `model`: FlattenedInputWrapper-wrapped. `x`/`x_adv`: flat (N, 784). `y`: (N,) true labels
+    (used only to identify the runner-up at the clean input, not to check correctness -- callers
+    are expected to pass already correctly-classified points, matching this module's convention,
+    but this function itself doesn't enforce it).
+
+    Returns {"mean_cosine_alignment", "std_cosine_alignment"}.
+    """
+    with torch.no_grad():
+        logits_clean = model(x)
+        logits_adv = model(x_adv)
+    dz = logits_adv - logits_clean
+
+    masked = logits_clean.clone()
+    masked.scatter_(1, y.unsqueeze(1), float("-inf"))
+    k = masked.argmax(dim=1)
+
+    dz_k = dz.gather(1, k.unsqueeze(1)).squeeze(1)
+    dz_y = dz.gather(1, y.unsqueeze(1)).squeeze(1)
+    numerator = dz_k - dz_y
+    denom = dz.norm(p=2, dim=-1) * (2.0 ** 0.5)
+    cosine = torch.where(denom > 1e-12, numerator / denom.clamp_min(1e-12), torch.zeros_like(denom))
+
+    return {
+        "mean_cosine_alignment": cosine.mean().item(),
+        "std_cosine_alignment": cosine.std().item(),
     }
 
 

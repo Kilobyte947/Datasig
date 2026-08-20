@@ -22,6 +22,7 @@ from mnist_lipschitz.adversarial.run_experiment import (
     most_and_least_sensitive_examples,
     head_layer_bound_check,
 )
+from mnist_lipschitz.adversarial.seed_sweep import train_or_load_checkpoint, run_single_seed_width
 
 
 def _small_trained_cnn(seed=0, n_train=2000, epochs=3):
@@ -231,3 +232,63 @@ def test_run_cnn_adversarial_width_sweep_with_distance_fn_mahalanobis_runs_end_t
         assert "feature_distance" in most_sensitive
         assert "pixel_distance" in most_sensitive
         assert most_sensitive["R_adv"] >= least_sensitive["R_adv"]
+
+
+# --- seed_sweep.py seeding discipline: train_seed and attack_seed must be independent ---
+# (Checkpoint 2 of the multi-seed confirmation sweep -- see seed_sweep.py's top docstring. This
+# is load-bearing for the same reason the two determinism checks above are: the Mahalanobis half
+# of this project reuses bit-identical checkpoints/adversarial examples, which depends on training
+# being reproducible independently of attack sampling. Collapsing train_seed/attack_seed into one
+# seed would silently break that guarantee.)
+
+_SEED_DISCIPLINE_KWARGS = dict(epochs=2, train_subset_size=400, n_query_points=10,
+                                n_train_norm_points=40, n_pool_points=60, n_attack_points=15,
+                                epsilons=(0.15,), pgd_num_steps=2, pgd_num_restarts=1, max_pairs=None)
+
+
+def test_train_or_load_checkpoint_same_train_seed_gives_bit_identical_weights():
+    """checkpoint_dir=None forces two INDEPENDENT trainings (no cache hit masking the check) --
+    train_or_load_checkpoint doesn't even accept an attack_seed parameter, so this proves
+    training is a pure function of train_seed alone, by construction, not just convention."""
+    model_a, *_ = train_or_load_checkpoint(train_seed=0, width=8, epochs=2, train_subset_size=400,
+                                            checkpoint_dir=None, verbose=False)
+    model_b, *_ = train_or_load_checkpoint(train_seed=0, width=8, epochs=2, train_subset_size=400,
+                                            checkpoint_dir=None, verbose=False)
+    state_a, state_b = model_a.state_dict(), model_b.state_dict()
+    assert set(state_a.keys()) == set(state_b.keys())
+    for key in state_a:
+        assert torch.equal(state_a[key], state_b[key]), f"mismatched weights for {key!r}"
+
+
+def test_run_single_seed_width_same_train_seed_different_attack_seed_gives_bit_identical_model():
+    """End-to-end regression guard on the public API: same train_seed, DIFFERENT attack_seed ->
+    identical train_acc/test_acc (a very strong proxy for bit-identical weights, computed to full
+    float64 precision over a deterministic eval set) -- catches any future accidental wiring of
+    attack_seed into training that the direct state_dict check above wouldn't."""
+    df_a = run_single_seed_width(train_seed=0, attack_seed=0, width=8, distance_fn=euclidean_distance_fn,
+                                  checkpoint_dir=None, verbose=False, **_SEED_DISCIPLINE_KWARGS)
+    df_b = run_single_seed_width(train_seed=0, attack_seed=1, width=8, distance_fn=euclidean_distance_fn,
+                                  checkpoint_dir=None, verbose=False, **_SEED_DISCIPLINE_KWARGS)
+
+    # NOTE: L_head_exact is NOT checked here -- it depends on the feature-standardizer's std
+    # (_effective_head_lipschitz_exact), fit on x_train_for_norm, which -- like the query/pool
+    # points -- is legitimately sampled from attack_seed's generator (see
+    # run_single_seed_width's docstring: attack_seed controls query/pool/norm-point sampling).
+    # So L_head_exact varying with attack_seed is expected, not a seeding-discipline violation;
+    # train_acc/test_acc (computed only from the trained weights) are the correct proxy here.
+    assert df_a["train_acc"].iloc[0] == df_b["train_acc"].iloc[0]
+    assert df_a["test_acc"].iloc[0] == df_b["test_acc"].iloc[0]
+
+
+def test_run_single_seed_width_same_seeds_gives_bit_identical_x_adv():
+    """Same train_seed AND same attack_seed, called twice independently (checkpoint_dir=None, so
+    the model is retrained -- not loaded -- both times, and x_adv is recomputed both times) ->
+    every R_adv/max_R_adv/pct_misclassified value must match EXACTLY, not just approximately,
+    since these are deterministic functions of (model, x_adv) and both must be bit-identical."""
+    df_a = run_single_seed_width(train_seed=0, attack_seed=0, width=8, distance_fn=euclidean_distance_fn,
+                                  checkpoint_dir=None, verbose=False, **_SEED_DISCIPLINE_KWARGS)
+    df_b = run_single_seed_width(train_seed=0, attack_seed=0, width=8, distance_fn=euclidean_distance_fn,
+                                  checkpoint_dir=None, verbose=False, **_SEED_DISCIPLINE_KWARGS)
+
+    for col in ("mean_R_adv", "max_R_adv", "pct_misclassified", "mean_cosine_alignment"):
+        assert (df_a[col].values == df_b[col].values).all(), col
