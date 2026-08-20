@@ -433,3 +433,32 @@ def plot_umap_mindist_sweep(sweep_rows, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_variance_explained_curve(curve_all_pairs, curve_near_neighbor, save_path=None):
+    """Cumulative variance-explained vs. eigenvector rank, one line per population -- the
+    Euclidean-vs-Mahalanobis near/all reversal investigation
+    (`results/mahalanobis_flip_mechanism.md`): if near-neighbor pixel differences load more
+    heavily on low-variance (rare) eigenvector directions than all-pairs differences do, the
+    near-neighbor curve should sit visibly *below* the all-pairs curve across most ranks (slower
+    to reach 100% as more eigenvectors, including low-variance ones, are needed to explain the
+    same fraction of the difference).
+
+    `curve_all_pairs`/`curve_near_neighbor`: (784,) arrays/tensors, each the population-mean
+    cumulative fraction of squared pixel-difference norm explained by the top-k eigenvectors
+    (`svd_ridge_precision`'s V, sorted by descending eigenvalue), for k=1..784.
+    """
+    curve_all_pairs = curve_all_pairs.detach().cpu().numpy() if hasattr(curve_all_pairs, "detach") else np.asarray(curve_all_pairs)
+    curve_near_neighbor = curve_near_neighbor.detach().cpu().numpy() if hasattr(curve_near_neighbor, "detach") else np.asarray(curve_near_neighbor)
+    ranks = np.arange(1, len(curve_all_pairs) + 1)
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    ax.plot(ranks, curve_all_pairs, color="tab:blue", label="all-pairs")
+    ax.plot(ranks, curve_near_neighbor, color="tab:orange", label="near-neighbor")
+    ax.set_xlabel("eigenvector rank (descending eigenvalue -- 1 = highest variance)")
+    ax.set_ylabel("mean cumulative fraction of squared pixel-difference norm")
+    ax.set_title("Where pairwise pixel differences live in the covariance eigenbasis")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

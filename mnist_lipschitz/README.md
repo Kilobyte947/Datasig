@@ -286,11 +286,21 @@ slightly more likely to have a disproportionately large margin swing for
 their (small) pixel-space distance. Under Mahalanobis distance this
 **flips**: near-neighbor pairs have a **lower** mean ratio than the
 general population (−18-24%). Both directions are consistent across all
-three models. Why the direction flips with the metric is not established
-here — a plausible starting point is that the Mahalanobis metric
-downweights the very directions raw-pixel nearest neighbors are most
-likely to differ along (the high-variance directions the covariance
-already captures), but this hasn't been checked directly.
+three models. **Why the direction flips with the metric is now confirmed, not speculative**:
+Mahalanobis distance amplifies raw pixel differences along *low*-variance (rare) directions and
+shrinks them along *high*-variance (common) ones (a coordinate's contribution scales as
+`1/eigenvalue`) — measured directly (logistic regression, `results/mahalanobis_flip_mechanism.md`)
+that near-neighbor pairs' pixel differences load measurably more on those low-variance directions
+than a random pair's differences do: only 61.7% of a near-neighbor pair's squared difference-norm
+sits in the top-50 highest-variance eigenvector directions, versus 82.1% for an all-pairs pair (a
+gap that holds across essentially the whole spectrum, not just at rank 50), and near-neighbor pairs
+get amplified 46.2% more by Mahalanobis distance than all-pairs do on average (mean amplification
+factor 3.30 vs. 2.26). That's what flips the ratio: Mahalanobis inflates near-neighbor pairs'
+distances (the ratio's denominator) disproportionately more than it inflates a random pair's,
+which shrinks near-neighbor pairs' ratio disproportionately more, flipping them from above-average
+to below-average. (This also corrects an earlier, unchecked guess in this section, which had the
+mechanism backwards — claiming near-neighbors differ mainly along *high*-variance directions that
+get *downweighted*; measurement shows the opposite: low-variance directions that get amplified.)
 
 **Validity check: are the flagged near-neighbor pairs just mislabeled examples?** A natural
 objection to treating a high-ratio near-neighbor pair as evidence of real model sensitivity is
@@ -531,8 +541,9 @@ for Nick/Terry, not decided here.
   typical MNIST pixel-space distances** (image L2 norms ~9.3, so radius
   1.0 is a genuinely "local" ~10% perturbation) rather than by a
   dedicated sensitivity sweep the way epsilon was.
-- **Why the ratio-distribution flip (see above) reverses direction
-  between Euclidean and Mahalanobis distance is not established.**
+- ~~Why the ratio-distribution flip (see above) reverses direction between Euclidean and
+  Mahalanobis distance is not established.~~ **Resolved** — see the confirmed mechanism in the
+  Results section above and `results/mahalanobis_flip_mechanism.md` for the full measurement.
 - **The embedding degree sweep only covers logistic regression, only Mahalanobis distance, and
   only degrees 1-3.** Whether the same monotonic-shrink-plus-stable-reversal pattern holds for
   the MLP/CNN, under Euclidean distance in the embedded space, or at higher degrees (where
