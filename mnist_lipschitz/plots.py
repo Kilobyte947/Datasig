@@ -462,3 +462,39 @@ def plot_variance_explained_curve(curve_all_pairs, curve_near_neighbor, save_pat
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_umap_ncomponents_sweep(sweep_rows, save_path=None):
+    """UMAP `n_components` sweep (`notebook_umap.ipynb`'s artifact-vs-signal follow-up
+    investigation, parallel to `plot_umap_mindist_sweep`'s `min_dist` sweep): validation quality
+    (`knn_label_purity`, left) and the ratio-distribution near/all elevation (right), both against
+    `n_components` -- tests whether the near/all inflation is specific to compressing down to a
+    low-dimensional (5D) embedding, or persists at higher output dimensions too.
+
+    `sweep_rows`: list of dicts, each with `n_components`, `knn_label_purity`, and
+    `near_over_all` keys (matches the sweep this project's own notebook cell builds).
+    """
+    n_components_vals = [r["n_components"] for r in sweep_rows]
+    purities = [r["knn_label_purity"] for r in sweep_rows]
+    near_over_all = [r["near_over_all"] for r in sweep_rows]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(n_components_vals, purities, marker="o", color="tab:blue")
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xlabel("n_components")
+    ax1.set_ylabel("knn_label_purity (k=5)")
+    ax1.set_title("Validation quality vs. n_components")
+    ax1.legend(fontsize=8)
+
+    ax2.plot(n_components_vals, near_over_all, marker="s", color="tab:orange", label="UMAP near/all")
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xlabel("n_components")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation vs. n_components")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("UMAP n_components sweep: is the near/all elevation specific to low output dimension?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

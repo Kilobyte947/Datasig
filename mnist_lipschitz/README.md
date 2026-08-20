@@ -507,6 +507,14 @@ real model sensitivity, checked three independent ways:
    distinct handwriting styles UMAP compressed together — "0" most often. Same underlying
    mechanism (aggressive local compression divorced from raw-pixel geometry), a different and more
    common expression of it than the single worst case suggested.
+4. **An `n_components` sweep** (5 -> 10 -> 20 -> 50 -> 100, holding `min_dist`/`n_neighbors` fixed)
+   rules out "just an under-parameterized 5D embedding" as the explanation: near/all stays in a
+   tight 5.46x-5.67x band and `knn_label_purity` stays in a tight 0.834-0.843 band across the
+   entire 20x range in output dimension, with no trend toward the raw-pixel-Euclidean baseline
+   (1.13x). Giving UMAP 20x more room to represent the data doesn't relax the effect at all, unlike
+   the `min_dist` sweep above (point 2), which does relax it — so the elevation is not a
+   low-dimensionality compression artifact specifically; it's intrinsic to UMAP's local-structure
+   objective regardless of output dimension. See `results/umap_ncomponents_sweep.png`.
 
 **Fit/evaluate separation was checked directly, not assumed**: the fitted UMAP embedding is fit
 once on a training-set dev subset and only ever evaluated via `.transform()` on test-set-derived
