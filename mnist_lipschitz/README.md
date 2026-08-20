@@ -489,7 +489,14 @@ real model sensitivity, checked three independent ways:
 3. **The single most extreme outlier** (`all_pairs_max` = 290.6) is a directly-inspected pair: a
    true "2" and a true "0", visually distinct digits with an unremarkable raw-pixel distance
    (9.09), which UMAP nonetheless placed at distance 0.043 — a confirmed embedding-compression
-   error, not a discovered similarity.
+   error, not a discovered similarity. Not a one-off: ranking every all-pairs pair by
+   raw-pixel-distance / UMAP-distance finds 16,929 pairs (3.4% of all 499,500) above a 10x ratio,
+   visually confirmed as genuine tearing in the top 8 — see `results/umap_tearing_pairs_gallery.png`.
+   Most of that broader pattern is **not** cross-digit collapse like the headline outlier: 18 of
+   the top 20 tearing pairs are the *same* true digit (both correctly classified), just visually
+   distinct handwriting styles UMAP compressed together — "0" most often. Same underlying
+   mechanism (aggressive local compression divorced from raw-pixel geometry), a different and more
+   common expression of it than the single worst case suggested.
 
 **Fit/evaluate separation was checked directly, not assumed**: the fitted UMAP embedding is fit
 once on a training-set dev subset and only ever evaluated via `.transform()` on test-set-derived
