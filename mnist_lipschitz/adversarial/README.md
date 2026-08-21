@@ -56,7 +56,10 @@ exact value** — FGSM/PGD maximize cross-entropy loss, not `R_adv` directly. Re
 | `tests/test_attacks.py` | FGSM/PGD stay within the epsilon ball and `[0,1]`; `epsilon=0` is a no-op; PGD's single-step/single-restart case reduces exactly to FGSM. |
 | `tests/test_run_experiment.py` | Correctly-classified-only filtering; `achieved_ratio`'s logit-space convention; PGD achieves at least as much sensitivity as FGSM; the `max_R_adv > L_full_estimated` sanity check warns without dropping the row; `head_layer_bound_check` never exceeds its own Cauchy-Schwarz bound. |
 | `tests/test_mahalanobis.py` | **Central correctness checkpoint**: `compute_bounds_with_distance_fn(distance_fn=euclidean_distance_fn)` reduces to EXACTLY `layer_decomposition_experiment`'s own numbers. Also: Mahalanobis `distance_fn` correctness, retraining determinism (the `*_with_distance_fn` width sweep reproduces bit-identical checkpoints to the original), and end-to-end Mahalanobis runs. |
-| `results/` | Generated outputs (git-ignored except `.gitkeep`): per-`(epsilon, method)` CSVs, width-sweep CSVs, and every plot, for both metrics. |
+| `strong_cnn_experiment.py` | StrongCNN variant of this comparison (see "StrongCNN sub-experiment" below): `strong_cnn_extractor_fn`, `strong_cnn_head_module`, `fit_strong_cnn_feature_normalizer`, `compute_strong_cnn_bounds`, `strong_cnn_head_layer_bound_check`, `strong_cnn_bound_comparison`, `main` — reuses `attacks.py`/`plots.py`/`run_experiment.py`'s architecture-agnostic functions unchanged. |
+| `notebook_adversarial_strongcnn.ipynb` | Thin driver notebook for the StrongCNN baseline (Euclidean + Mahalanobis, no width/seed sweep). No reusable logic of its own. |
+| `tests/test_strong_cnn_experiment.py` | Composition identity (`head(extractor(x)) == model(x)` exactly); eval-mode discipline (BatchNorm train-mode batch-dependence confirmed directly, every StrongCNN-specific function raises if `model.training`); self-consistency parity for `compute_strong_cnn_bounds`; `strong_cnn_head_layer_bound_check` never exceeds its own bound; feature-normalizer floor; end-to-end smoke test. |
+| `results/` | Generated outputs (git-ignored except `.gitkeep`): per-`(epsilon, method)` CSVs, width-sweep CSVs, and every plot, for both metrics (SmallCNN `adversarial_*` and StrongCNN `strong_cnn_*` prefixes). |
 
 ## Design decisions
 
@@ -216,3 +219,98 @@ Mahalanobis distance is only ever defined over raw pixel input or an explicit em
   metric down/up-weights for these particular examples hasn't been inspected.
 - Only the default CNN width range (`4`-`64`) and epsilon range (`0.05`-`0.25`) were tested; larger
   or non-uniform widths/epsilons might behave differently.
+
+## StrongCNN sub-experiment
+
+`strong_cnn_experiment.py` + `notebook_adversarial_strongcnn.ipynb` repeat this sub-experiment's
+baseline comparison (single checkpoint, Euclidean + Mahalanobis, FGSM/PGD, WITH the tight/loose
+bound comparison) for `StrongCNN` (`models.py`) — the project's higher-capacity,
+near-state-of-the-art baseline — instead of `SmallCNN`. **Deliberately out of scope**: any
+CNN-capacity/width sweep (`StrongCNN`'s conv channels are hardcoded, not a constructor parameter,
+unlike `SmallCNN`'s) and the multi-seed confirmation sweep (`seed_sweep.py`'s pattern, also
+`SmallCNN`-specific).
+
+**Why this needed a separate module rather than reusing `run_experiment.py`/`layer_decomposition.py`
+directly**: `StrongCNN` has no `.extractor`/`.head` submodule split — `layer_decomposition.py`'s
+own docstring explicitly excludes it ("this model isn't part of" that sub-experiment). But
+`StrongCNN.classifier[4]` (the final layer of its classifier) IS a plain `nn.Linear` with nothing
+nonlinear after it, so the same tight/loose bound methodology still applies via an
+EXTERNALLY-constructed extractor/head split (`strong_cnn_extractor_fn` = `model.features` +
+`model.classifier[:4]`, `strong_cnn_head_module` = `model.classifier[4]`) — built in a new module
+rather than by editing `models.py` or `layer_decomposition.py`, following the same "reuse, never
+edit `layer_decomposition.py`" precedent `compute_bounds_with_distance_fn` already established for
+the Mahalanobis generalization. `attacks.py`, `plots.py`, and every architecture-agnostic function
+in `run_experiment.py` (`run_epsilon_sweep`, `summarize_epsilon_sweep`,
+`most_and_least_sensitive_examples`, ...) are reused UNCHANGED.
+
+**Eval-mode discipline (the one genuinely new correctness concern vs. `SmallCNN`)**: `SmallCNN`
+has no `BatchNorm`/`Dropout`, so nothing in this sub-experiment's original machinery ever needed
+to care about train/eval mode. `StrongCNN` has `BatchNorm1d`/`Dropout2d`/`Dropout` — every
+`strong_cnn_experiment.py` function that forwards data through the model RAISES `ValueError` if
+`model.training` is `True`, rather than silently calling `.eval()` itself: a caller who forgot to
+set eval mode has a real bug (BatchNorm in train mode uses per-batch statistics, so a
+bound/attack computation would silently depend on which other points happen to share a batch)
+worth surfacing loudly, not hiding.
+
+**Weaker checkpoint-gating than the `SmallCNN` machinery, stated explicitly**: no independently-
+existing `layer_decomposition_experiment`-equivalent exists for `StrongCNN` to check
+`compute_strong_cnn_bounds` against (unlike `compute_bounds_with_distance_fn`'s check against
+`layer_decomposition_experiment` itself). `tests/test_strong_cnn_experiment.py`'s parity test is
+therefore a SELF-consistency check (does `compute_strong_cnn_bounds` reduce to a from-scratch
+manual `pairwise_lipschitz` computation using the same closures), not a check against an
+independently-validated reference.
+
+### Results (seed=0 run)
+
+Trained via `STRONG_CNN_CONFIG`'s exact recipe (full 60k MNIST, 25 epochs, light
+rotation/translation augmentation, cosine-annealed LR — same recipe
+`mnist_lipschitz.run_experiment.run_stronger_cnn_raw_mnist_experiment` uses elsewhere in this
+project): `train_acc=0.9981`, `test_acc=0.9966`. Total standalone wall-clock time: ~19.7 minutes
+on CPU (~18 min training, ~100s for the bound comparison + full FGSM/PGD sweep).
+
+`L_head_exact=2.105` (identical between metrics, by construction — confirmed directly).
+
+| Metric | `L_extractor_est` | `L_full_estimated` | `product_bound` | `looseness_ratio` |
+|---|---|---|---|---|
+| Euclidean | 3.838 | 5.716 | 8.079 | 1.41x |
+| Mahalanobis | 1.638 | 2.508 | 3.448 | 1.37x |
+
+Far tighter than `SmallCNN`'s baseline looseness (16.4x under Euclidean) — `StrongCNN`'s much
+deeper extractor (6 conv/BatchNorm layers + a 256-d FC layer, vs. `SmallCNN`'s 2 conv layers)
+apparently makes the per-layer submultiplicative bound a much closer approximation to the
+network's actual end-to-end sensitivity, at least at this query-sample size.
+
+**A much more severe tight-bound gap than `SmallCNN` ever showed, under Euclidean distance**:
+`max_R_adv` exceeds `L_full_estimated` at EVERY epsilon/method combination tested
+(`ratio_to_L_full` from 1.02x up to 4.21x), not the occasional ~1.00-1.02x graze `SmallCNN`'s
+baseline showed. Still consistent with `L_full_estimated` being a valid lower-bound *estimate*
+from a finite, randomly-sampled 200-point query set (not a violation of any mathematical
+guarantee) — but the magnitude suggests `StrongCNN`'s higher capacity/depth has sharper, more
+localized sensitivity directions that only PGD's targeted, iterative search finds, which random
+natural-image query pairs are unlikely to land near.
+
+**Under Mahalanobis distance, the same gap is dramatically smaller** (`ratio_to_L_full` ranges
+`0.34x-1.82x`, vs. Euclidean's `1.02x-4.21x` at the same epsilons) — the OPPOSITE of the pattern
+found for `SmallCNN`'s width sweep, where Mahalanobis distance WIDENED the gap rather than
+narrowing it. Why this effect flips direction between the two architectures is not established.
+
+Full per-epsilon tables, the most/least-sensitive example breakdown, and the discussion above are
+in `notebook_adversarial_strongcnn.ipynb`'s own "Findings and observations" section.
+
+### Status
+
+**Confirmed working:** all `tests/test_strong_cnn_experiment.py` tests pass (composition
+identity, eval-mode-matters, self-consistency parity, head-bound-check, feature-normalizer floor,
+end-to-end smoke). The notebook executes end to end with zero errors.
+
+**Explicitly out of scope, not attempted:** any CNN-capacity/width sweep; a multi-seed
+confirmation sweep; Carlini-Wagner or other attack methods; adversarial training or any other
+mitigation.
+
+**Worth revisiting:**
+- Why the Euclidean-vs-Mahalanobis gap-width effect flips direction between `StrongCNN` and
+  `SmallCNN` — the single most interesting open question from this run.
+- Only `n_query_points=200` was used for the Lipschitz-bound estimate; given how much `max_R_adv`
+  exceeds `L_full_estimated` here, a larger query sample might substantially tighten it for
+  `StrongCNN` specifically — not tested.
+- This is a single-seed run — stability across seeds is unknown.
