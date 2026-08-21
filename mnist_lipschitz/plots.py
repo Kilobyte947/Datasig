@@ -498,3 +498,83 @@ def plot_umap_ncomponents_sweep(sweep_rows, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_umap_nneighbors_sweep(sweep_rows, save_path=None):
+    """UMAP `n_neighbors` sweep (`notebook_umap.ipynb`'s follow-up to the Nature Reviews Primer's
+    rule of thumb that reducing to more output dimensions than `n_neighbors` provides no
+    additional benefit -- relevant since the `n_components` sweep held `n_neighbors` fixed at its
+    default of 15 while going up to `n_components=100`). Same layout as
+    `plot_umap_ncomponents_sweep`/`plot_umap_mindist_sweep`: validation quality
+    (`knn_label_purity`, left) and the ratio-distribution near/all elevation (right), both against
+    `n_neighbors`, at fixed `n_components`/`min_dist`.
+
+    `sweep_rows`: list of dicts, each with `n_neighbors`, `knn_label_purity`, and `near_over_all`
+    keys.
+    """
+    n_neighbors_vals = [r["n_neighbors"] for r in sweep_rows]
+    purities = [r["knn_label_purity"] for r in sweep_rows]
+    near_over_all = [r["near_over_all"] for r in sweep_rows]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(n_neighbors_vals, purities, marker="o", color="tab:blue")
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xlabel("n_neighbors")
+    ax1.set_ylabel("knn_label_purity (k=5)")
+    ax1.set_title("Validation quality vs. n_neighbors")
+    ax1.legend(fontsize=8)
+
+    ax2.plot(n_neighbors_vals, near_over_all, marker="s", color="tab:orange", label="UMAP near/all")
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xlabel("n_neighbors")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation vs. n_neighbors")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("UMAP n_neighbors sweep: does a larger local-neighborhood size shrink the near/all elevation?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_umap_seed_sweep(sweep_rows, save_path=None):
+    """UMAP random-seed sweep (`notebook_umap.ipynb`'s stochasticity check, per the Nature
+    Reviews Primer's note that UMAP is a stochastic algorithm and results should be checked for
+    consistency across random seeds): validation quality (`knn_label_purity`, left) and the
+    ratio-distribution near/all elevation (right), both against `seed`, at the original baseline
+    `n_components=5`/default `min_dist`/`n_neighbors`. Bar charts rather than line plots -- unlike
+    `n_components`/`n_neighbors`/`min_dist`, `seed` has no natural ordering, so connecting the
+    points with a line would visually imply a trend that isn't there.
+
+    `sweep_rows`: list of dicts, each with `seed`, `knn_label_purity`, and `near_over_all` keys.
+    """
+    seeds = [r["seed"] for r in sweep_rows]
+    purities = [r["knn_label_purity"] for r in sweep_rows]
+    near_over_all = [r["near_over_all"] for r in sweep_rows]
+    x = np.arange(len(seeds))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.bar(x, purities, color="tab:blue")
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([str(s) for s in seeds])
+    ax1.set_xlabel("seed")
+    ax1.set_ylabel("knn_label_purity (k=5)")
+    ax1.set_title("Validation quality across seeds")
+    ax1.legend(fontsize=8)
+
+    ax2.bar(x, near_over_all, color="tab:orange", label="UMAP near/all")
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([str(s) for s in seeds])
+    ax2.set_xlabel("seed")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation across seeds")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("UMAP seed sweep: is the near/all elevation stable across random restarts?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

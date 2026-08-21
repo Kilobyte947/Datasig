@@ -515,6 +515,31 @@ real model sensitivity, checked three independent ways:
    the `min_dist` sweep above (point 2), which does relax it — so the elevation is not a
    low-dimensionality compression artifact specifically; it's intrinsic to UMAP's local-structure
    objective regardless of output dimension. See `results/umap_ncomponents_sweep.png`.
+5. **An `n_neighbors` sweep** (5 -> 15 -> 30 -> 50 -> 100, at the baseline `n_components=5`/
+   `min_dist=0.1`) — prompted by the UMAP Nature Reviews Primer's rule of thumb that reducing to
+   more output dimensions than `n_neighbors` provides no additional benefit, which is exactly the
+   regime point 4's sweep stayed in (`n_neighbors` fixed at 15 throughout) — finds a real,
+   monotonic effect this time: near/all drops 6.31x -> 5.67x -> 5.08x -> 4.61x -> 3.85x as
+   `n_neighbors` widens, tracking a matching decline in `knn_label_purity` (0.845 -> 0.769).
+   Unlike the `n_components` sweep, this one isn't flat — but even at `n_neighbors=100` (6.7x the
+   default), near/all is still more than 3x the raw-pixel-Euclidean baseline (1.13x), so widening
+   the neighborhood weakens the artifact without eliminating it. See
+   `results/umap_nneighbors_sweep.png`.
+6. **A seed sweep** (5 independent UMAP fits, `seed` 0-4, at the baseline configuration) — the
+   Primer stresses UMAP is stochastic and results should be checked for consistency across random
+   seeds before being trusted. Near/all across the 5 seeds: mean=5.6554, std=0.0649 (~1.1%
+   coefficient of variation); `knn_label_purity` similarly tight at 0.835-0.843. **The elevation is
+   not a one-off from an unlucky random initialization** — it reproduces closely across independent
+   fits. See `results/umap_seed_sweep.png`.
+
+**The Nature Reviews Primer on UMAP itself is independent support for the artifact verdict**:
+Healy, J. & McInnes, L. *Uniform manifold approximation and projection.* Nat Rev Methods Primers
+4, 82 (2024) explicitly states that quantitative distances in a UMAP embedding should not be used
+to draw conclusions — exactly the failure mode points 1-3 above demonstrate directly on this
+dataset. That the two rules of thumb it also gives (`n_components` vs. `n_neighbors`, and
+stochasticity across seeds) both check out as expected (points 4-6) is corroborating, not
+contradicting, evidence: this isn't a bug specific to this project's setup, it's the documented
+general behavior of the method.
 
 **Fit/evaluate separation was checked directly, not assumed**: the fitted UMAP embedding is fit
 once on a training-set dev subset and only ever evaluated via `.transform()` on test-set-derived
