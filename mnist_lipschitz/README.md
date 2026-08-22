@@ -553,6 +553,50 @@ image evidence. Separately: this sub-experiment uses **unsupervised** UMAP only 
 supervised UMAP (using class labels during fitting) was the intended variant is an open question
 for Nick/Terry, not decided here.
 
+## Sub-experiment: smoothing before `local_patch_cross_terms` (verdict: helps a lot, but never actually fixes it)
+
+`smoothing.py`/`notebook_smoothing.ipynb` follows up directly on the `local_patch_cross_terms`
+negative result above (epsilon selection fails categorically, cv 0.91-1.45 against a `cv<=0.05`
+bound at every epsilon tried). The working hypothesis there was that MNIST's mostly-black
+background makes cross-term features near-zero everywhere except the stroke, starving the
+per-subsample covariance of signal. `smoothing.py::gaussian_blur_embedding(x, sigma)` applies an
+isotropic Gaussian blur (separable convolution, zero-padded border, `sigma<=0` an exact identity)
+to spread stroke intensity into more non-zero pixels *before* cross-terms are computed
+(`smoothed_cross_terms_embedding`, a composition helper kept separate from
+`local_patch_cross_terms` itself). `notebook_smoothing.ipynb` reruns the same
+`epsilon_stability_check` + ratio-distribution pipeline used everywhere else in this section, at
+`sigma` in `{0, 0.5, 1, 1.5, 2, 3}` — `sigma=0` reproduces the unblurred baseline as this sweep's
+own row, not a fresh comparison.
+
+**Smoothing helps substantially but never actually crosses the stability bound.** The best-fit
+coefficient of variation drops **~8.5x** from the unblurred baseline (0.6396) to its minimum at
+`sigma=1` (0.0754), stays roughly flat through `sigma=1.5` (0.0758), then climbs again at `sigma=2`
+(0.1149) and `sigma=3` (0.1241) — a real, reproducible U-shape, not noise. But even at its best
+point the cv is still ~50% above the `cv<=0.05` bound, so `stability_pass=False` at every single
+sigma tested, and (per this sweep's design — see `run_experiment.py::run_smoothing_sweep`'s
+docstring) no Mahalanobis ratio-distribution numbers were ever computed, at any sigma: there was
+never a stable epsilon to build a precision matrix from.
+
+**The near-best region (sigma~1-1.5) is not a case of "stability only kicks in after digits are
+already illegible."** Visual inspection of the sample-digit galleries at `sigma=1`/`1.5` shows
+every digit still immediately readable — softened strokes, but the topological features that
+distinguish digits (the 0's hole, the 3's two lobes, the 9's loop-and-tail) are fully intact.
+`knn_label_purity` backs this up quantitatively: it *peaks* in the same region (0.8146 at
+`sigma=1`, 0.8158 at `sigma=1.5`, both above the unblurred baseline's 0.7732), not degraded at all.
+Visible degradation only shows up later, at `sigma=3` (purity drops to 0.7154, and the gallery
+shows real structural loss — the 0's hole nearly filled in, the 3 collapsed toward a blob) — well
+past the stability sweet spot, not overlapping with it.
+
+**Bottom line**: the hypothesis that smoothing would fix `local_patch_cross_terms`'s instability is
+**partially supported, not confirmed**. There is a genuine, visually-clean sweet spot around
+`sigma=1-1.5` where instability is far less severe and digits remain fully distinguishable — but
+it still isn't stable enough to trust a Mahalanobis fit built on it, so this embedding+distance
+combination remains unusable within the tested range, same overall status as before this
+follow-up, just with a clearer picture of *how close* smoothing gets and *where* the sweet spot is
+(useful groundwork if anyone tries a finer sigma grid or a larger epsilon-selection pool later, per
+the notebook's closing note). See `notebook_smoothing.ipynb` for the full per-sigma table, plots,
+and galleries.
+
 ## Limitations and open questions
 
 - **Sub-method disagreement (4-14x) is larger here than in the toy

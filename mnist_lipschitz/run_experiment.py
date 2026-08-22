@@ -25,8 +25,10 @@ from mnist_lipschitz.distance import (
     sweep_epsilon,
 )
 from mnist_lipschitz.embeddings import elementwise_embedding
+from mnist_lipschitz.smoothing import smoothed_cross_terms_embedding, gaussian_blur_embedding
 from mnist_lipschitz.plots import (
     MODEL_ORDER, plot_embedding_degree_sweep, plot_ratio_distribution, plot_image_pairs,
+    plot_smoothing_gallery, plot_smoothing_stability_sweep, plot_smoothing_ratio_sweep,
 )
 
 torch.set_default_dtype(torch.float64)
@@ -112,6 +114,32 @@ def select_epsilon(epsilon_values, cond_numbers, cv_values, max_cond=1e4, max_cv
         print(f"WARNING: no epsilon met both cond<={max_cond:g} and cv<={max_cv}; "
               f"falling back to epsilon={chosen:g} (lowest cv={cv_values[best_idx]:.4f})")
     return chosen
+
+
+def _knn_label_purity(embedded, labels, k=5):
+    """For each point, the fraction of its `k` nearest neighbors (Euclidean, in the given embedded
+    space, excluding itself) that share its true label, averaged over every point -- a well-
+    clustered-by-digit embedding scores well above the 10-class chance baseline (0.10); a
+    scattered one sits close to it. Used by `run_smoothing_sweep` as a quantitative embedding-
+    quality check per sigma, the same convention `umap_embedding.py::knn_label_purity` already
+    established for the UMAP sub-experiment -- kept as a small private duplicate here rather than
+    imported from `umap_embedding.py`, since that module is its own self-contained sub-experiment
+    (see its docstring) and pulling the `umap-learn` dependency into this file's imports for one
+    generic helper would work against that separation.
+
+    `embedded`: (N, d) array/tensor of embedded coordinates. `labels`: (N,) integer true labels,
+    same order.
+    """
+    embedded_np = embedded.detach().cpu().numpy() if hasattr(embedded, "detach") else np.asarray(embedded)
+    labels_np = labels.detach().cpu().numpy() if hasattr(labels, "detach") else np.asarray(labels)
+
+    nn = NearestNeighbors(n_neighbors=k + 1)
+    nn.fit(embedded_np)
+    _, neighbor_idx = nn.kneighbors(embedded_np)
+    neighbor_idx = neighbor_idx[:, 1:]
+
+    matches = (labels_np[neighbor_idx] == labels_np[:, None]).mean()
+    return float(matches)
 
 # ---------------------------------------------------------------------------
 # Main comparison
@@ -384,6 +412,177 @@ def run_embedding_degree_sweep(
 
     return {"degree_results": degree_results, "ratio_results": ratio_results,
             "lr_model": lr_model, "train": train, "test": test, "figure": fig}
+
+
+# ---------------------------------------------------------------------------
+# Smoothing-strength sweep (opt-in, not part of main()/run_mnist_experiment())
+# ---------------------------------------------------------------------------
+
+def run_smoothing_sweep(
+    sigmas=(0, 0.5, 1, 1.5, 2, 3), lr_model=None, train=None, test=None, epsilon_pool=None,
+    epsilon_values=(1e-6, 1e-4, 1e-2, 1e-1, 1.0, 10.0, 100.0),
+    epsilon_pool_size=3000, n_subsamples=5, subsample_frac=0.8, stability_n_points=100,
+    max_cond=1e4, max_cv=0.05, n_ratio_points=300, k_neighbors=5, n_purity_points=1000,
+    gallery_digits=(0, 1, 3, 5, 7, 9), seed=SEED, verbose=True,
+):
+    """Repeats epsilon-selection + ratio-distribution analysis, once per Gaussian-blur strength
+    `sigma` in `sigmas`, for `smoothing.py::smoothed_cross_terms_embedding` -- tests whether
+    blurring the raw image before computing `embeddings.py::local_patch_cross_terms` fixes that
+    embedding's categorical Mahalanobis epsilon-selection failure (`README.md`'s "Epsilon selection
+    fails categorically for this embedding" section: cv 0.91-1.45 against a `cv<=0.05` bound at
+    every epsilon tried on the *unblurred* embedding). `sigma=0` reproduces that exact unblurred
+    case (`smoothed_cross_terms_embedding(x, 0)` is `local_patch_cross_terms(x)` unchanged), so this
+    sweep's first row is a direct determinism cross-check against that already-documented result,
+    not a fresh, unverifiable starting point.
+
+    Follows `run_embedding_degree_sweep`'s established structure and defaults (same epsilon pool
+    size/values, same `epsilon_stability_check` call, same `select_epsilon` bound), with two
+    changes specific to this embedding:
+
+    - **`n_ratio_points` defaults to 300, not 1000.** `local_patch_cross_terms`'s 3920-dimensional
+      output already exhausted this machine's memory/swap at 1000 points (~499,500 gathered pairs)
+      in the earlier Euclidean follow-up (`results/local_patch_cross_terms_euclidean_followup.md`)
+      -- this sweep repeats that embedding's memory footprint up to 6 times (once per sigma), so it
+      inherits that same reduced point count preemptively rather than discovering the same ceiling
+      6 times over.
+    - **Mahalanobis is only computed when epsilon selection actually passes both bounds at that
+      sigma** (`cond<=max_cond` and `cv<=max_cv` for at least one candidate epsilon) -- unlike
+      `run_embedding_degree_sweep`, which always has a stable epsilon to fall back to.
+      `select_epsilon`'s fallback (lowest-cv epsilon among uniformly bad candidates, with its own
+      warning) is exactly the mechanism that produced the *unreliable* `epsilon=1` fallback number
+      documented in `README.md` for the unblurred embedding -- computing an expensive full-60k-point
+      Mahalanobis ratio-distribution analysis on top of a fallback epsilon that never met the
+      stability bound would just repeat that same caveat 6 times without adding information. Rows
+      where this is skipped have `mahalanobis_ratio_summary=None`.
+
+    Each sigma's row also gets a `knn_label_purity` embedding-quality number (same convention
+    `umap_embedding.py::knn_label_purity` established for the UMAP sub-experiment, duplicated
+    locally as `_knn_label_purity` above rather than imported -- see that helper's docstring) on a
+    fixed, sigma-independent validation subset, and a visual gallery
+    (`plots.py::plot_smoothing_gallery`) of a handful of sample digits blurred at that sigma, to
+    directly check the risk this whole sweep exists to guard against: too much smoothing making
+    different digits look alike.
+
+    Returns a dict: `sigma_results` (keyed by sigma, each holding the epsilon sweep, `min_cv`,
+    `stability_pass`, `selected_epsilon`, `knn_label_purity`, `euclidean_ratio_summary`,
+    `mahalanobis_ratio_summary` -- `None` when skipped -- and `gallery_figure`), `stability_figure`,
+    `ratio_figure`, plus `lr_model`/`train`/`test` for reuse by a caller. Also saves a summary JSON
+    (figures excluded -- not JSON-serializable), the merged ratio-distribution arrays, and both
+    summary plots plus one gallery PNG per sigma to `results/`.
+
+    Deliberately **not** called from `main()` (mirrors `run_embedding_degree_sweep`'s own opt-in
+    convention) -- run it directly, e.g. from `notebook_smoothing.ipynb`.
+    """
+    torch.manual_seed(seed)
+    if train is None:
+        train = load_mnist(train=True)
+    if test is None:
+        test = load_mnist(train=False)
+    if lr_model is None:
+        train_flat = make_loader(train.x_flat, train.y, batch_size=256, shuffle=True, seed=seed)
+        test_flat = make_loader(test.x_flat, test.y, batch_size=1000, shuffle=False)
+        lr_model, lr_train_acc, lr_test_acc = train_classifier(
+            LogisticRegressionModel(), train_flat, test_flat, epochs=15, lr=1e-3, verbose=verbose)
+        if verbose:
+            print(f"trained reference logistic-regression model: "
+                  f"train_acc={lr_train_acc:.4f}  test_acc={lr_test_acc:.4f}")
+    if epsilon_pool is None:
+        epsilon_pool = get_dev_subset(train, epsilon_pool_size, seed=seed)
+
+    val_idx = stratified_subset_idx(test.y, n_purity_points, seed=seed)
+    x_val, y_val = test.x_flat[val_idx], test.y[val_idx]
+
+    gallery_idx = [(test.y == d).nonzero(as_tuple=True)[0][0].item() for d in gallery_digits]
+    gallery_images = test.x_flat[gallery_idx]
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+
+    sigma_results = {}
+    ratio_arrays = {}
+    for sigma in sigmas:
+        if verbose:
+            print(f"\n=== sigma={sigma} ===")
+        embed_fn = lambda x, sigma=sigma: smoothed_cross_terms_embedding(x, sigma)
+
+        cond_numbers = sweep_epsilon(embed_fn(epsilon_pool.x_flat), list(epsilon_values))
+        stability_results = epsilon_stability_check(
+            lr_model, epsilon_pool, list(epsilon_values), n_subsamples=n_subsamples,
+            subsample_frac=subsample_frac, n_points=stability_n_points, seed=seed, verbose=verbose,
+            embed_fn=embed_fn)
+        cv_values = [stability_results[eps]["cv"] for eps in epsilon_values]
+        min_cv = min(cv_values)
+
+        candidates = [eps for eps, cond, cv in zip(epsilon_values, cond_numbers, cv_values)
+                      if cond <= max_cond and cv <= max_cv]
+        stability_pass = len(candidates) > 0
+        selected_epsilon = select_epsilon(list(epsilon_values), cond_numbers, cv_values,
+                                           max_cond=max_cond, max_cv=max_cv, verbose=verbose)
+        cond_at_selected = cond_numbers[list(epsilon_values).index(selected_epsilon)]
+
+        purity = _knn_label_purity(embed_fn(x_val), y_val, k=5)
+
+        euclidean_embedded_fn = lambda x, y, embed_fn=embed_fn: euclidean_distance_fn(embed_fn(x), embed_fn(y))
+        euclidean_ratio_result = run_ratio_distribution_analysis(
+            lr_model, "logistic_regression", f"smoothing_sigma{sigma}_euclidean",
+            test.x_flat, test.y, euclidean_embedded_fn,
+            n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+        ratio_arrays.update(euclidean_ratio_result["arrays"])
+
+        mahalanobis_ratio_result = None
+        if stability_pass:
+            precision = svd_ridge_precision(embed_fn(train.x_flat), selected_epsilon)
+            mahalanobis_fn = make_mahalanobis_distance_fn(precision, embed_fn=embed_fn)
+            mahalanobis_ratio_result = run_ratio_distribution_analysis(
+                lr_model, "logistic_regression", f"smoothing_sigma{sigma}_mahalanobis",
+                test.x_flat, test.y, mahalanobis_fn,
+                n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+            ratio_arrays.update(mahalanobis_ratio_result["arrays"])
+        elif verbose:
+            print(f"  sigma={sigma}: epsilon stability did not pass (min cv={min_cv:.4f} > {max_cv}) "
+                  f"-- skipping Mahalanobis ratio-distribution")
+
+        blurred_gallery = gaussian_blur_embedding(gallery_images, sigma)
+        gallery_samples = [
+            {"digit": d, "original": gallery_images[i].numpy().reshape(28, 28),
+             "blurred": blurred_gallery[i].numpy().reshape(28, 28)}
+            for i, d in enumerate(gallery_digits)
+        ]
+        gallery_fig = plot_smoothing_gallery(
+            gallery_samples, sigma, save_path=RESULTS_DIR / f"smoothing_gallery_sigma{sigma}.png")
+
+        sigma_results[sigma] = {
+            "epsilon_values": list(epsilon_values), "cond_numbers": cond_numbers, "cv_values": cv_values,
+            "min_cv": min_cv, "stability_pass": stability_pass, "selected_epsilon": selected_epsilon,
+            "cond_number_at_selected_epsilon": cond_at_selected,
+            "knn_label_purity": purity,
+            "euclidean_ratio_summary": euclidean_ratio_result["summary"],
+            "mahalanobis_ratio_summary": mahalanobis_ratio_result["summary"] if mahalanobis_ratio_result else None,
+            "gallery_figure": gallery_fig,
+        }
+
+    with open(RESULTS_DIR / "smoothing_sweep_results.json", "w") as f:
+        json.dump({str(s): {k: v for k, v in r.items() if k != "gallery_figure"}
+                    for s, r in sigma_results.items()}, f, indent=2)
+    np.savez(RESULTS_DIR / "smoothing_sweep_arrays.npz", **ratio_arrays)
+
+    stability_rows = [{"sigma": s, "min_cv": r["min_cv"]} for s, r in sigma_results.items()]
+    stability_fig = plot_smoothing_stability_sweep(
+        stability_rows, max_cv=max_cv, save_path=RESULTS_DIR / "smoothing_stability_sweep.png")
+
+    ratio_rows = [{
+        "sigma": s,
+        "knn_label_purity": r["knn_label_purity"],
+        "euclidean_near_over_all": r["euclidean_ratio_summary"]["near_neighbor_mean"] / r["euclidean_ratio_summary"]["all_pairs_mean"],
+        "mahalanobis_near_over_all": (r["mahalanobis_ratio_summary"]["near_neighbor_mean"] / r["mahalanobis_ratio_summary"]["all_pairs_mean"])
+                                      if r["mahalanobis_ratio_summary"] else None,
+    } for s, r in sigma_results.items()]
+    ratio_fig = plot_smoothing_ratio_sweep(ratio_rows, save_path=RESULTS_DIR / "smoothing_ratio_sweep.png")
+
+    if verbose:
+        print(f"\nSaved results to {RESULTS_DIR}")
+
+    return {"sigma_results": sigma_results, "stability_figure": stability_fig, "ratio_figure": ratio_fig,
+            "lr_model": lr_model, "train": train, "test": test}
 
 
 def run_stronger_cnn_raw_mnist_experiment(

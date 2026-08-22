@@ -578,3 +578,110 @@ def plot_umap_seed_sweep(sweep_rows, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_smoothing_gallery(samples, sigma, save_path=None):
+    """Visual sanity check for `notebook_smoothing.ipynb`'s smoothing-strength sweep: original vs.
+    Gaussian-blurred (`smoothing.py::gaussian_blur_embedding`, this `sigma`) versions of a fixed
+    set of sample digits, side by side -- lets a reader eyeball directly whether a given `sigma` is
+    still visually distinguishable digit-to-digit, or has already blurred away the strokes that
+    make one digit look different from another (the risk this whole sweep exists to check).
+
+    `samples`: list of dicts, each with `digit` (int), `original` and `blurred` ((28, 28)
+    arrays/tensors, same image before/after blurring at this `sigma`).
+    """
+    n = len(samples)
+    fig, axes = plt.subplots(n, 2, figsize=(4, 1.8 * n), dpi=80)
+    axes = np.atleast_2d(axes)
+
+    for row, s in enumerate(samples):
+        original = np.asarray(s["original"]).reshape(28, 28)
+        blurred = np.asarray(s["blurred"]).reshape(28, 28)
+
+        axes[row, 0].imshow(original, cmap="gray", vmin=0, vmax=1)
+        axes[row, 0].set_title("original", fontsize=8)
+        axes[row, 1].imshow(blurred, cmap="gray", vmin=0, vmax=1)
+        axes[row, 1].set_title("blurred", fontsize=8)
+
+        for col in range(2):
+            axes[row, col].set_xticks([])
+            axes[row, col].set_yticks([])
+        axes[row, 0].set_ylabel(f"digit={s['digit']}", fontsize=9, rotation=0, ha="right",
+                                 va="center", labelpad=25)
+
+    fig.suptitle(f"Smoothing gallery: sigma={sigma}")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_smoothing_stability_sweep(sweep_rows, max_cv=0.05, save_path=None):
+    """Epsilon-selection stability (best/minimum coefficient of variation found across the
+    standard epsilon sweep) vs. smoothing strength, for `notebook_smoothing.ipynb`'s
+    `smoothed_cross_terms_embedding` sweep -- tests whether blurring before computing cross-terms
+    fixes the categorical epsilon-selection failure `local_patch_cross_terms` has on its own
+    (`README.md`'s "Epsilon selection fails categorically for this embedding" section, cv
+    0.91-1.45 against this same `max_cv` bound, at `sigma=0` here).
+
+    `sweep_rows`: list of dicts, each with `sigma` and `min_cv` keys (the smallest cv found across
+    that sigma's epsilon candidates -- matches `run_experiment.py::run_smoothing_sweep`'s per-sigma
+    `min_cv`).
+    """
+    sigmas = [r["sigma"] for r in sweep_rows]
+    min_cvs = [r["min_cv"] for r in sweep_rows]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(sigmas, min_cvs, marker="o", color="tab:blue")
+    ax.axhline(max_cv, color="gray", linestyle="--", label=f"stability bound (cv<={max_cv})")
+    ax.set_xlabel("sigma (Gaussian blur strength)")
+    ax.set_ylabel("best (minimum) coefficient of variation across epsilon candidates")
+    ax.set_title("Epsilon-selection stability vs. smoothing strength")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_smoothing_ratio_sweep(sweep_rows, save_path=None):
+    """Validation quality (`knn_label_purity`, left) and the ratio-distribution near/all elevation
+    (right, Euclidean always, Mahalanobis only at sigmas where epsilon selection passed the
+    stability bound) vs. smoothing strength, for `notebook_smoothing.ipynb`'s
+    `smoothed_cross_terms_embedding` sweep. Same two-panel layout as the UMAP sweeps
+    (`plot_umap_mindist_sweep` etc.) for a directly comparable read.
+
+    `sweep_rows`: list of dicts, each with `sigma`, `knn_label_purity`, `euclidean_near_over_all`,
+    and `mahalanobis_near_over_all` (the last `None` at sigmas where Mahalanobis wasn't computed --
+    skipped, not plotted as 0, so a gap in the line is visible rather than misleadingly implying a
+    measured near/all of zero).
+    """
+    sigmas = [r["sigma"] for r in sweep_rows]
+    purities = [r["knn_label_purity"] for r in sweep_rows]
+    euclidean_near_over_all = [r["euclidean_near_over_all"] for r in sweep_rows]
+    mahalanobis_sigmas = [r["sigma"] for r in sweep_rows if r["mahalanobis_near_over_all"] is not None]
+    mahalanobis_near_over_all = [r["mahalanobis_near_over_all"] for r in sweep_rows
+                                  if r["mahalanobis_near_over_all"] is not None]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(sigmas, purities, marker="o", color="tab:blue")
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xlabel("sigma")
+    ax1.set_ylabel("knn_label_purity (k=5)")
+    ax1.set_title("Validation quality vs. smoothing strength")
+    ax1.legend(fontsize=8)
+
+    ax2.plot(sigmas, euclidean_near_over_all, marker="s", color="tab:orange",
+              label="smoothed cross-terms + Euclidean")
+    if mahalanobis_sigmas:
+        ax2.plot(mahalanobis_sigmas, mahalanobis_near_over_all, marker="^", color="tab:green",
+                  label="smoothed cross-terms + Mahalanobis")
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xlabel("sigma")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation vs. smoothing strength")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("Smoothing-strength sweep: does blurring before cross-terms fix the Mahalanobis instability?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
