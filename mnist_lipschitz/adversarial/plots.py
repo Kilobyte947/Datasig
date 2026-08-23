@@ -68,6 +68,39 @@ def plot_R_adv_distribution(sweep_results, L_full_estimated, product_bound,
     return fig
 
 
+def plot_R_adv_histogram_by_outcome(sweep_results, epsilon, method="FGSM", metric_name="Euclidean",
+                                     bins=30, save_path=None):
+    """Histogram of the achieved sensitivity ratio R_adv for ONE (epsilon, method) case, split by
+    attack outcome: green for examples that stayed correctly classified under the attack, red for
+    examples the attack flipped -- complements `plot_R_adv_distribution`'s aggregate box plot by
+    showing whether misclassified examples are concentrated at higher R_adv.
+
+    `sweep_results`: `run_experiment.run_epsilon_sweep`'s return value (needs its `"per_case"`
+    dict's `(epsilon, method) -> {"R_adv", "is_misclassified"}` entries).
+    `epsilon`/`method`: select which `per_case` entry to plot (`method` one of `"FGSM"`/`"PGD"`).
+    `metric_name`: only affects axis/title wording, same convention as `plot_R_adv_distribution`.
+    """
+    case = sweep_results["per_case"][(epsilon, method)]
+    R_adv = case["R_adv"].detach().cpu().numpy()
+    is_misclassified = case["is_misclassified"].detach().cpu().numpy()
+
+    correct, misclassified = R_adv[~is_misclassified], R_adv[is_misclassified]
+    bin_edges = np.histogram_bin_edges(R_adv, bins=bins)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist([correct, misclassified], bins=bin_edges, stacked=True,
+            color=["tab:green", "tab:red"],
+            label=[f"not misclassified (n={len(correct)})", f"misclassified (n={len(misclassified)})"])
+    ax.set_xlabel(f"R_adv = ||f(x) - f(x_adv)||_2 / {metric_name.lower()}_distance(x, x_adv)")
+    ax.set_ylabel("number of images")
+    ax.set_title(f"R_adv distribution by attack outcome (epsilon={epsilon:g}, {method}, "
+                 f"{metric_name} distance)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
 def plot_bound_closeness_vs_width(combined_df, metric_name="Euclidean", save_path=None):
     """Two-panel summary across the CNN-width sweep (mirrors
     `mnist_lipschitz.plots.plot_layer_decomposition_sweep`'s two-panel layout for the same width
@@ -185,6 +218,32 @@ def plot_extreme_examples(most_sensitive, least_sensitive, width=None, metric_na
     fig.suptitle(title)
     fig.tight_layout()
     fig.subplots_adjust(hspace=0.6, top=0.90)
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_example_pair(example, metric_name="Euclidean", save_path=None):
+    """Clean vs. adversarial image for ONE example from `run_experiment.find_examples_by_criteria`
+    (or any dict with its `x`/`x_adv`/`y_true`/`pred_clean`/`pred_adv`/`R_adv`/`epsilon`/`method`/
+    `pixel_distance` keys) -- the single-example building block `plot_extreme_examples` uses per
+    row, generalized to stand alone so callers can display an arbitrary-length list of flagged
+    examples one at a time rather than in one fixed-size (most/least) figure.
+    """
+    x = example["x"].detach().cpu().numpy().reshape(28, 28)
+    x_adv = example["x_adv"].detach().cpu().numpy().reshape(28, 28)
+
+    fig, axes = plt.subplots(1, 2, figsize=(5, 3))
+    axes[0].imshow(x, cmap="gray", vmin=0, vmax=1)
+    axes[0].set_title(f"clean\ntrue={example['y_true']} pred={example['pred_clean']}", fontsize=9)
+    axes[1].imshow(x_adv, cmap="gray", vmin=0, vmax=1)
+    axes[1].set_title(f"adversarial\npred={example['pred_adv']}", fontsize=9)
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    fig.suptitle(f"R_adv={example['R_adv']:.3f}  eps={example['epsilon']:g} {example['method']}  "
+                 f"{metric_name.lower()}_distance={example['pixel_distance']:.3f}", fontsize=9)
+    fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
 

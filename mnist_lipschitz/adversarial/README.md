@@ -268,12 +268,12 @@ rotation/translation augmentation, cosine-annealed LR — same recipe
 project): `train_acc=0.9981`, `test_acc=0.9966`. Total standalone wall-clock time: ~19.7 minutes
 on CPU (~18 min training, ~100s for the bound comparison + full FGSM/PGD sweep).
 
-`L_head_exact=2.105` (identical between metrics, by construction — confirmed directly).
+`L_head_exact=2.103` (identical between metrics, by construction — confirmed directly).
 
 | Metric | `L_extractor_est` | `L_full_estimated` | `product_bound` | `looseness_ratio` |
 |---|---|---|---|---|
-| Euclidean | 3.838 | 5.716 | 8.079 | 1.41x |
-| Mahalanobis | 1.638 | 2.508 | 3.448 | 1.37x |
+| Euclidean | 4.295 | 6.148 | 9.034 | 1.47x |
+| Mahalanobis | 1.901 | 2.948 | 3.998 | 1.36x |
 
 Far tighter than `SmallCNN`'s baseline looseness (16.4x under Euclidean) — `StrongCNN`'s much
 deeper extractor (6 conv/BatchNorm layers + a 256-d FC layer, vs. `SmallCNN`'s 2 conv layers)
@@ -281,16 +281,20 @@ apparently makes the per-layer submultiplicative bound a much closer approximati
 network's actual end-to-end sensitivity, at least at this query-sample size.
 
 **A much more severe tight-bound gap than `SmallCNN` ever showed, under Euclidean distance**:
-`max_R_adv` exceeds `L_full_estimated` at EVERY epsilon/method combination tested
-(`ratio_to_L_full` from 1.02x up to 4.21x), not the occasional ~1.00-1.02x graze `SmallCNN`'s
-baseline showed. Still consistent with `L_full_estimated` being a valid lower-bound *estimate*
-from a finite, randomly-sampled 200-point query set (not a violation of any mathematical
-guarantee) — but the magnitude suggests `StrongCNN`'s higher capacity/depth has sharper, more
-localized sensitivity directions that only PGD's targeted, iterative search finds, which random
-natural-image query pairs are unlikely to land near.
+`max_R_adv` exceeds `L_full_estimated` at 9 of the 10 epsilon/method combinations tested
+(`ratio_to_L_full` from 0.92x up to 3.73x; only `epsilon=0.25`/FGSM stays under the bound), not
+the occasional ~1.00-1.02x graze `SmallCNN`'s baseline showed. Still consistent with
+`L_full_estimated` being a valid lower-bound *estimate* from a finite, randomly-sampled
+1000-point query set (not a violation of any mathematical guarantee) — but the magnitude
+suggests `StrongCNN`'s higher capacity/depth has sharper, more localized sensitivity directions
+that only PGD's targeted, iterative search finds, which random natural-image query pairs are
+unlikely to land near. Raising `n_query_points` from 200 to 1000 only modestly tightened the
+bound (`L_full_estimated`: `5.716 -> 6.148` Euclidean, `2.508 -> 2.948` Mahalanobis), so the gap
+looks like an intrinsic property of random-pair sampling here, not a simple undersampling
+artifact that more query points would fix.
 
 **Under Mahalanobis distance, the same gap is dramatically smaller** (`ratio_to_L_full` ranges
-`0.34x-1.82x`, vs. Euclidean's `1.02x-4.21x` at the same epsilons) — the OPPOSITE of the pattern
+`0.29x-1.38x`, vs. Euclidean's `0.92x-3.73x` at the same epsilons) — the OPPOSITE of the pattern
 found for `SmallCNN`'s width sweep, where Mahalanobis distance WIDENED the gap rather than
 narrowing it. Why this effect flips direction between the two architectures is not established.
 
@@ -310,7 +314,8 @@ mitigation.
 **Worth revisiting:**
 - Why the Euclidean-vs-Mahalanobis gap-width effect flips direction between `StrongCNN` and
   `SmallCNN` — the single most interesting open question from this run.
-- Only `n_query_points=200` was used for the Lipschitz-bound estimate; given how much `max_R_adv`
-  exceeds `L_full_estimated` here, a larger query sample might substantially tighten it for
-  `StrongCNN` specifically — not tested.
+- `n_query_points` was raised from 200 to 1000 for the Lipschitz-bound estimate and only
+  modestly tightened `L_full_estimated`, while the achieved-vs-bound gap stayed large —
+  consistent with the gap being intrinsic to random-pair sampling missing PGD's sharp
+  sensitivity directions, not simple undersampling; not pushed further (e.g. 5000+ points).
 - This is a single-seed run — stability across seeds is unknown.

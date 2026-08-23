@@ -39,6 +39,9 @@ through it rather than a bare `python`/`pytest`:
 .venv/bin/python -m pytest mnist_lipschitz/tests/test_estimators.py -v
 .venv/bin/python -m pytest mnist_lipschitz/tests/test_estimators.py::test_name -v
 
+# tests for the adversarial sub-package (separate tests/ directory, one level down)
+.venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/ -v
+
 # run the full experiment driver
 .venv/bin/python -c "from toy_lipschitz.run_experiment import main; main()"
 .venv/bin/python -c "from mnist_lipschitz.run_experiment import main; main()"
@@ -82,13 +85,37 @@ and a pluggable `distance_fn`):
   save to `results/`; `main()` runs the full sequence for that experiment.
 - **`tests/`** — see "Test methodology" below; mirrors the module names above.
 
-**`mnist_lipschitz/layer_decomposition.py`** is a separate, self-contained sub-experiment (splits
-`SmallCNN` into `extractor`/`head` to check the submultiplicative bound
-`L_extractor * L_head >= L_full`) with its own notebook
-(`notebook_layer_decomposition.ipynb`) and tests (`tests/test_layer_decomposition.py`). **It is
-not documented in `mnist_lipschitz/README.md`** — read the module's own docstring and
-`run_cnn_width_sweep`/`layer_decomposition_experiment` before changing it, don't assume the
-README is exhaustive for this package.
+`mnist_lipschitz` also has several self-contained sub-experiments, each with its own notebook and
+`tests/`, layered on top of the shared modules above rather than replacing them. Each is documented
+in its own module docstring/README section, not exhaustively here — read those before changing one:
+
+- **`mnist_lipschitz/layer_decomposition.py`** — splits `SmallCNN` into `extractor`/`head` to check
+  the submultiplicative bound `L_extractor * L_head >= L_full`
+  (`notebook_layer_decomposition.ipynb`, `tests/test_layer_decomposition.py`). **Not documented in
+  `mnist_lipschitz/README.md`** — read the module's own docstring and
+  `run_cnn_width_sweep`/`layer_decomposition_experiment` before changing it.
+- **`mnist_lipschitz/adversarial/`** — a separate sub-package (own `README.md`, `run_experiment.py`,
+  `plots.py`, `attacks.py`, `tests/`) built on top of `layer_decomposition.py`: generates real
+  FGSM/PGD adversarial examples against trained CNNs and checks whether their achieved sensitivity
+  approaches the tight (`L_full_estimated`) vs. loose (`product_bound`) Lipschitz bounds, under
+  both Euclidean and Mahalanobis distance. `strong_cnn_experiment.py` repeats the same comparison
+  for `StrongCNN` via an externally-built extractor/head split, since `StrongCNN` itself has no
+  `.extractor`/`.head` attributes. Read `mnist_lipschitz/adversarial/README.md` before changing
+  anything here — it documents why the Mahalanobis repeat reuses the same checkpoints/adversarial
+  examples rather than re-deriving them, and why `StrongCNN`'s functions raise on `model.training`
+  instead of silently calling `.eval()`.
+- **`mnist_lipschitz/umap_embedding.py`** — tries a *learned* UMAP embedding as a distance metric
+  instead of a hand-built Mahalanobis one (`notebook_umap.ipynb`, `tests/test_umap_embedding.py`).
+  Verdict, documented at length in `mnist_lipschitz/README.md`: the elevated near-neighbor ratio it
+  produces is a compression artifact of UMAP's local-structure objective, not evidence of real
+  model sensitivity — don't treat it as a validated distance metric for other work in this repo.
+- **`mnist_lipschitz/augmentation.py`** (`random_affine_augment`) and `models.py`'s `StrongCNN` — a
+  higher-capacity, near-state-of-the-art CNN baseline (BatchNorm + Dropout, trained with light
+  rotation/translation augmentation) built ahead of a later data-cleaning experiment.
+  `StrongCNN` deliberately has no `extractor`/`head` split like `SmallCNN` — see
+  `adversarial/README.md`'s "StrongCNN sub-experiment" section for how the adversarial comparison
+  works around that. Its BatchNorm/Dropout layers are also why eval-mode discipline (checked
+  explicitly, not assumed) first became a real concern in this codebase.
 
 ## Test methodology — checkpoint-gating
 

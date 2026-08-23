@@ -62,7 +62,12 @@
       "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook2.py\")",
       "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook3.py\")",
       "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/patch_adv_notebook4.py\")",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/test_mahalanobis.py -v)",
+      "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('mnist_lipschitz/adversarial/plots.py'\\).read\\(\\)\\); print\\('syntax ok'\\)\")",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/append_mahalanobis_notebook.py\")",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/ --collect-only -q)",
+      "Bash(git rev-list *)"
     ]
   }
 }

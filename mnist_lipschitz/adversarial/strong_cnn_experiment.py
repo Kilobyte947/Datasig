@@ -335,7 +335,7 @@ def main(distance_fn=None, seed=0, verbose=True):
     model.eval()  # defensive -- see module docstring
 
     generator = torch.Generator().manual_seed(seed)
-    query_idx = torch.randperm(len(test), generator=generator)[:200]
+    query_idx = torch.randperm(len(test), generator=generator)[:1000]
     x_query, y_query = test.x_flat[query_idx], test.y[query_idx]
 
     pool_mask = torch.ones(len(test), dtype=torch.bool)

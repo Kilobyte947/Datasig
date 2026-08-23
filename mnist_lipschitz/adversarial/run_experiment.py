@@ -198,7 +198,9 @@ def run_epsilon_sweep(model, x_pool, y_pool, epsilons=DEFAULT_EPSILONS,
 
     Returns a dict: {"x_eval", "y_eval" (the sampled correctly-classified points actually
     attacked), "kept_frac" (Requirement 2's filtering diagnostic), "per_case": {(epsilon, method):
-    {"x_adv", "R_adv" (the (n_points,) achieved_ratio tensor), "pct_misclassified"}}}.
+    {"x_adv", "R_adv" (the (n_points,) achieved_ratio tensor), "pct_misclassified",
+    "is_misclassified" (the (n_points,) bool tensor `pct_misclassified` is the mean of, aligned
+    index-for-index with `x_eval`/`y_eval`/`R_adv`)}}}.
     """
     generator = torch.Generator().manual_seed(seed)
     x_correct, y_correct, kept_frac = filter_correctly_classified(model, x_pool, y_pool)
@@ -220,9 +222,11 @@ def run_epsilon_sweep(model, x_pool, y_pool, epsilons=DEFAULT_EPSILONS,
             R_adv = achieved_ratio(model, x_eval, x_adv, distance_fn=distance_fn)
             with torch.no_grad():
                 preds_adv = model(x_adv).argmax(dim=1)
-            pct_misclassified = (preds_adv != y_eval).float().mean().item()
+            is_misclassified = preds_adv != y_eval
+            pct_misclassified = is_misclassified.float().mean().item()
             per_case[(epsilon, method)] = {
                 "x_adv": x_adv, "R_adv": R_adv, "pct_misclassified": pct_misclassified,
+                "is_misclassified": is_misclassified,
             }
             if verbose:
                 print(f"  epsilon={epsilon:g}  {method:4s}  mean_R_adv={R_adv.mean().item():.4f}  "
@@ -346,6 +350,55 @@ def most_and_least_sensitive_examples(model, sweep_results, distance_fn=euclidea
         }
 
     return _package(best), _package(worst)
+
+
+def find_examples_by_criteria(model, sweep_results, epsilon, method, R_adv_max=None,
+                               misclassified_only=None, distance_fn=euclidean_distance_fn):
+    """Finds every example in ONE (epsilon, method) case of a `run_epsilon_sweep` result matching
+    simple threshold/outcome criteria -- e.g. "R_adv < 10 but still misclassified," the cheap
+    flips a small sensitivity ratio was nonetheless enough to cause. Generalizes
+    `most_and_least_sensitive_examples`'s per-example dict-packaging (one `model(x)`/`model(x_adv)`
+    call per match) to an arbitrary filter instead of a fixed argmax/argmin pair, and additionally
+    carries the FULL logit vector (not just argmax) on each side, for direct inspection of how
+    close/far the flip was.
+
+    `R_adv_max`: keep only examples with `R_adv < R_adv_max` (None = no threshold).
+    `misclassified_only`: True keeps only misclassified examples, False keeps only still-correct
+    ones, None applies no filter on outcome.
+    `distance_fn` MUST match what `sweep_results` was computed under (see
+    `most_and_least_sensitive_examples`'s docstring for why) -- defaults to plain Euclidean.
+
+    Returns a list of dicts (possibly empty), each:
+        {"epsilon", "method", "index", "R_adv", "x", "x_adv", "pixel_distance", "y_true",
+         "pred_clean", "pred_adv", "logits_clean", "logits_adv"}
+    -- same core keys as `most_and_least_sensitive_examples`'s output, plus `logits_clean`/
+    `logits_adv` ((num_classes,) tensors, the model's full pre-softmax output on the clean/
+    adversarial image respectively; `pred_clean`/`pred_adv` are each logits' argmax).
+    """
+    case = sweep_results["per_case"][(epsilon, method)]
+    x_eval, y_eval = sweep_results["x_eval"], sweep_results["y_eval"]
+    R_adv, is_misclassified, x_adv_all = case["R_adv"], case["is_misclassified"], case["x_adv"]
+
+    mask = torch.ones_like(R_adv, dtype=torch.bool)
+    if R_adv_max is not None:
+        mask &= R_adv < R_adv_max
+    if misclassified_only is not None:
+        mask &= is_misclassified if misclassified_only else ~is_misclassified
+
+    examples = []
+    for idx in mask.nonzero(as_tuple=True)[0].tolist():
+        x, x_adv = x_eval[idx], x_adv_all[idx]
+        with torch.no_grad():
+            logits_clean = model(x.unsqueeze(0)).squeeze(0)
+            logits_adv = model(x_adv.unsqueeze(0)).squeeze(0)
+        examples.append({
+            "epsilon": epsilon, "method": method, "index": idx, "R_adv": R_adv[idx].item(),
+            "x": x, "x_adv": x_adv, "pixel_distance": distance_fn(x, x_adv).item(),
+            "y_true": y_eval[idx].item(),
+            "pred_clean": logits_clean.argmax().item(), "pred_adv": logits_adv.argmax().item(),
+            "logits_clean": logits_clean, "logits_adv": logits_adv,
+        })
+    return examples
 
 
 def head_layer_bound_check(model, example):
