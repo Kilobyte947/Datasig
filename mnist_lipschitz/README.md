@@ -597,6 +597,43 @@ follow-up, just with a clearer picture of *how close* smoothing gets and *where*
 the notebook's closing note). See `notebook_smoothing.ipynb` for the full per-sigma table, plots,
 and galleries.
 
+**Follow-up: is the smoothed-cross-terms + Euclidean near/all elevation (1.19 at `sigma=1`, 1.27 at
+`sigma=1.5`) a real signal, or another compression artifact?** Checked the same way as the UMAP
+sub-experiment below — numerator/denominator decomposition plus a visual gallery — since Mahalanobis
+never reached stability at any sigma, this Euclidean side-channel was the only thing left worth
+scrutinizing before drawing any conclusion from it.
+
+**Not a real signal — the numerator isn't elevated.** `margin_diff` is **29.8% *smaller*** for
+near-neighbor pairs than the general population, confirmed identical to raw-pixel-Euclidean on the
+exact same pairs (metric-independent), and identical at both `sigma=1` and `sigma=1.5` since the
+pairs and model don't change, only the metric does. The entire near/all elevation is
+denominator-driven, and specifically: raw-pixel Euclidean *already* compresses these same
+near-neighbor pairs by 33.9% (expected — "near-neighbor" is defined by raw-pixel proximity), and
+smoothing compresses them *further*, increasingly so with `sigma` (40.1% at `sigma=1`, 43.3% at
+`sigma=1.5`) — that growing extra compression, not any new margin-sensitivity signal, is what
+drives the ratio up from the raw-pixel baseline's 1.05 to 1.19/1.27.
+
+**But not the same kind of artifact as UMAP's tearing, either.** Visual inspection of the top 8
+near-neighbor pairs by ratio at each sigma (raw, unsmoothed images) shows every pair sharing a
+real, visible structural resemblance — several `true=7`/`true=1` pairs where a slanted, uncrossed 7
+looks almost identical to a 1, `true=2`/`true=7` pairs sharing the same diagonal stroke,
+`true=2`/`true=3` and `true=9`/`true=4` pairs sharing loop shapes, and one near-exact `true=1`/
+`true=1` duplicate at `sigma=1.5` (raw distance 0.38) — nothing resembling UMAP's tearing case (a
+visually distinct "2" and "0" placed at near-zero embedded distance). 14-15 of the top 15 pairs at
+each sigma involve an actual model misclassification, well above the ~14% base rate two independent
+points would show at this model's 92.7% test accuracy — but this is not 14-15 independent findings:
+just 3 recurring "hub" images (test indices 1326, 9024, 1901 — all already misclassified by the
+model) account for 11-12 of the 15 slots at each sigma, the same "one recurring image dominates"
+caveat already documented for this project's LR near-neighbor gallery check earlier in this file.
+
+**Verdict**: this metric mildly amplifies an already-known, already-weak raw-pixel locality effect,
+concentrated on a handful of already-hard images the model gets wrong — not a genuine new
+margin-sensitivity finding, and not a UMAP-style distortion artifact either. Combined with the
+sweep result above, this closes out the smoothing follow-up: smoothing measurably helps the
+Mahalanobis instability without fixing it, and the Euclidean side-channel it does support isn't
+carrying new signal. See `notebook_smoothing.ipynb`'s "Overall verdict" section for the full
+numeric decomposition and both galleries.
+
 ## Limitations and open questions
 
 - **Sub-method disagreement (4-14x) is larger here than in the toy
