@@ -22,13 +22,14 @@ from mnist_lipschitz.estimators import (
 )
 from mnist_lipschitz.distance import (
     svd_ridge_precision, make_mahalanobis_distance_fn, covariance_eigenvalues,
-    sweep_epsilon,
+    covariance_eigenbasis, truncated_precision, sweep_epsilon, sweep_k_condition_numbers,
 )
-from mnist_lipschitz.embeddings import elementwise_embedding
+from mnist_lipschitz.embeddings import elementwise_embedding, local_patch_cross_terms
 from mnist_lipschitz.smoothing import smoothed_cross_terms_embedding, gaussian_blur_embedding
 from mnist_lipschitz.plots import (
     MODEL_ORDER, plot_embedding_degree_sweep, plot_ratio_distribution, plot_image_pairs,
     plot_smoothing_gallery, plot_smoothing_stability_sweep, plot_smoothing_ratio_sweep,
+    plot_truncated_mahalanobis_stability_sweep, plot_truncated_mahalanobis_ratio_sweep,
 )
 
 torch.set_default_dtype(torch.float64)
@@ -113,6 +114,81 @@ def select_epsilon(epsilon_values, cond_numbers, cv_values, max_cond=1e4, max_cv
     if verbose:
         print(f"WARNING: no epsilon met both cond<={max_cond:g} and cv<={max_cv}; "
               f"falling back to epsilon={chosen:g} (lowest cv={cv_values[best_idx]:.4f})")
+    return chosen
+
+
+def k_stability_check(model, dataset, k_values, n_subsamples=5, subsample_frac=0.8,
+                       n_points=100, seed=SEED, verbose=True, embed_fn=None):
+    """`epsilon_stability_check`'s analogue for `distance.py::truncated_precision`: sweeps the
+    number of retained top-variance dimensions `k` instead of a ridge epsilon, using the same
+    multi-subsample coefficient-of-variation methodology (mean gradient-norm estimate per
+    subsample, cv = std/mean across subsamples).
+
+    **Deliberately shares one SVD per subsample across every `k` value**, unlike
+    `epsilon_stability_check`, which redraws a fresh subsample per epsilon candidate. Two reasons:
+    (1) different `k`'s are nested truncations of the exact same SVD (`k=5`'s top eigenvectors are
+    a strict prefix of `k=10`'s), so refitting per `k` would just repeat identical work at smaller
+    `k`; and (2) comparing cv across `k` on the *same* resampling draws isolates the effect of
+    truncation itself, rather than conflating it with independent resampling noise per `k`. This
+    also makes the sweep dramatically cheaper: `n_subsamples` SVDs total per feature space, not
+    `n_subsamples * len(k_values)`.
+
+    Uses a fixed reference model's `margin_fn` throughout, matching `epsilon_stability_check`'s
+    "one cheap, consistent yardstick" convention. `embed_fn` follows the same convention as
+    `epsilon_stability_check`/`gradient_norm_estimate`: leaving it unset checks raw pixel space.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    N = len(dataset)
+    n_sub = int(round(N * subsample_frac))
+
+    L_hats_per_k = {k: [] for k in k_values}
+    for _ in range(n_subsamples):
+        idx = torch.randperm(N, generator=generator)[:n_sub]
+        x_sub, y_sub = dataset.x_flat[idx], dataset.y[idx]
+
+        x_for_cov = embed_fn(x_sub) if embed_fn is not None else x_sub
+        V, eigenvalues = covariance_eigenbasis(x_for_cov)
+
+        pt_idx = torch.randperm(x_sub.shape[0], generator=generator)[:n_points]
+        for k in k_values:
+            V_k, eigenvalues_k = V[:, :k], eigenvalues[:k]
+            precision = V_k @ torch.diag(1.0 / eigenvalues_k) @ V_k.T
+            vals = gradient_norm_estimate(model, x_sub[pt_idx], y_sub[pt_idx], margin_fn,
+                                           precision=precision, embed_fn=embed_fn)
+            L_hats_per_k[k].append(vals.mean().item())
+
+    results = {}
+    for k in k_values:
+        L_hats_t = torch.tensor(L_hats_per_k[k])
+        mean = L_hats_t.mean().item()
+        std = L_hats_t.std().item()
+        cv = std / mean if mean > 1e-12 else float("inf")
+        results[k] = {"L_hats": L_hats_per_k[k], "mean": mean, "std": std, "cv": cv}
+        if verbose:
+            print(f"  k={k:<6} mean L_hat={mean:.4f}  std={std:.4f}  cv={cv:.4f}", flush=True)
+
+    return results
+
+
+def select_k(k_values, cond_numbers, cv_values, max_cond=1e4, max_cv=0.15, verbose=True):
+    """Largest k meeting both a condition-number and a stability (cv) bound -- unlike
+    `select_epsilon` (smallest epsilon preferred, since less regularization is better once
+    stable), truncated-eigenvalue Mahalanobis prefers to retain as much information (as large a k)
+    as possible while staying stable. Falls back to the lowest-cv k, with a warning, if none
+    qualify."""
+    candidates = [k for k, cond, cv in zip(k_values, cond_numbers, cv_values)
+                  if cond <= max_cond and cv <= max_cv]
+    if candidates:
+        chosen = max(candidates)
+        if verbose:
+            print(f"selected k={chosen} (largest meeting cond<={max_cond:g}, cv<={max_cv})")
+        return chosen
+
+    best_idx = min(range(len(cv_values)), key=lambda i: cv_values[i])
+    chosen = k_values[best_idx]
+    if verbose:
+        print(f"WARNING: no k met both cond<={max_cond:g} and cv<={max_cv}; "
+              f"falling back to k={chosen} (lowest cv={cv_values[best_idx]:.4f})")
     return chosen
 
 
@@ -583,6 +659,150 @@ def run_smoothing_sweep(
 
     return {"sigma_results": sigma_results, "stability_figure": stability_fig, "ratio_figure": ratio_fig,
             "lr_model": lr_model, "train": train, "test": test}
+
+
+# ---------------------------------------------------------------------------
+# Truncated-eigenvalue Mahalanobis sweep (opt-in, not part of main()/run_mnist_experiment())
+# ---------------------------------------------------------------------------
+
+def run_truncated_mahalanobis_sweep(
+    k_values=(5, 10, 20, 50, 100, 200), lr_model=None, train=None, test=None,
+    stability_pool=None, stability_pool_size=3000, n_subsamples=5, subsample_frac=0.8,
+    stability_n_points=100, max_cond=1e4, max_cv=0.05, n_ratio_points=300, k_neighbors=5,
+    n_purity_points=1000, seed=SEED, verbose=True,
+):
+    """Tests `distance.py::truncated_precision` (discard low-variance directions entirely) against
+    three feature spaces that all failed `svd_ridge_precision`'s ridge regularization (regularize
+    instead of discard) at every epsilon tried: raw pixels (well-conditioned under ridge, included
+    as a sanity-check baseline this new method should also handle cleanly), `local_patch_cross_terms`
+    (categorical epsilon-selection failure, cv 0.91-1.45), and `smoothed_cross_terms_embedding` at
+    `sigma=1` (the smoothing sweep's best purity/legibility point, cv 0.075 -- close to, but never
+    actually under, the 0.05 bound).
+
+    For each feature space, sweeps `k` in `k_values`, checking stability at every `k`
+    *individually* (unlike `run_smoothing_sweep`'s single-selected-epsilon-per-sigma design) --
+    the interesting question here is exactly which `k` values pass, not just whether any does, so
+    each `k` that passes both the condition-number and cv bounds gets its own full
+    ratio-distribution analysis; each that doesn't is skipped with `ratio_summary=None`.
+
+    Two efficiency choices, both driven by every tested `k` being a nested truncation of the same
+    full-rank SVD for a given feature space:
+    - The stability check itself (`k_stability_check`) shares one SVD per resampled subsample
+      across every `k`, rather than refitting per `k` (see its own docstring).
+    - The *final* eigenbasis used for both `knn_label_purity` and each passing `k`'s
+      ratio-distribution precision matrix is fit once per feature space, on the full training set
+      (matching every other final precision matrix in this project), and sliced per `k` -- not
+      refit per `k`.
+
+    `knn_label_purity` is computed on *whitened* truncated-Mahalanobis coordinates
+    (`embedded @ V_k / sqrt(eigenvalues_k)`, whose Euclidean distance exactly equals the truncated
+    Mahalanobis distance for that `k`) rather than the raw embedded space, so it reflects the
+    actual per-`k` metric being validated, not a `k`-independent proxy.
+
+    `n_ratio_points` defaults to 300, not 1000, matching `run_smoothing_sweep`'s reduced point
+    count for the same memory reason (`local_patch_cross_terms`'s 3920-dimensional output exhausted
+    this machine's memory/swap at 1000 points in an earlier one-off comparison) -- applied uniformly
+    across all three feature spaces here (including raw pixels) so results stay directly comparable
+    within one table, not just within each feature space's own row.
+
+    Returns a dict: `feature_space_results` (`{name: {k: {cond, cv, stability_pass,
+    knn_label_purity, ratio_summary}}}`), `stability_figure`, `ratio_figure`, plus
+    `lr_model`/`train`/`test` for reuse by a caller. Also saves a summary JSON, the merged
+    ratio-distribution arrays, and both summary plots to `results/`.
+
+    Deliberately **not** called from `main()` (mirrors `run_smoothing_sweep`'s own opt-in
+    convention) -- run it directly, e.g. from `notebook_truncated_mahalanobis.ipynb`.
+    """
+    torch.manual_seed(seed)
+    if train is None:
+        train = load_mnist(train=True)
+    if test is None:
+        test = load_mnist(train=False)
+    if lr_model is None:
+        train_flat = make_loader(train.x_flat, train.y, batch_size=256, shuffle=True, seed=seed)
+        test_flat = make_loader(test.x_flat, test.y, batch_size=1000, shuffle=False)
+        lr_model, lr_train_acc, lr_test_acc = train_classifier(
+            LogisticRegressionModel(), train_flat, test_flat, epochs=15, lr=1e-3, verbose=verbose)
+        if verbose:
+            print(f"trained reference logistic-regression model: "
+                  f"train_acc={lr_train_acc:.4f}  test_acc={lr_test_acc:.4f}")
+    if stability_pool is None:
+        stability_pool = get_dev_subset(train, stability_pool_size, seed=seed)
+
+    val_idx = stratified_subset_idx(test.y, n_purity_points, seed=seed)
+    x_val, y_val = test.x_flat[val_idx], test.y[val_idx]
+
+    feature_spaces = {
+        "raw_pixels": None,
+        "local_patch_cross_terms": lambda x: local_patch_cross_terms(x.reshape(*x.shape[:-1], 28, 28)),
+        "smoothed_cross_terms_sigma1": lambda x: smoothed_cross_terms_embedding(x, 1.0),
+    }
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    feature_space_results = {}
+    ratio_arrays = {}
+    for name, embed_fn in feature_spaces.items():
+        if verbose:
+            print(f"\n=== feature_space={name} ===")
+
+        stability_results = k_stability_check(
+            lr_model, stability_pool, list(k_values), n_subsamples=n_subsamples,
+            subsample_frac=subsample_frac, n_points=stability_n_points, seed=seed, verbose=verbose,
+            embed_fn=embed_fn)
+
+        x_for_cov_pool = embed_fn(stability_pool.x_flat) if embed_fn is not None else stability_pool.x_flat
+        cond_numbers = sweep_k_condition_numbers(x_for_cov_pool, list(k_values))
+
+        x_for_cov_train = embed_fn(train.x_flat) if embed_fn is not None else train.x_flat
+        V_full, eigenvalues_full = covariance_eigenbasis(x_for_cov_train)
+
+        embedded_val = embed_fn(x_val) if embed_fn is not None else x_val
+
+        k_results = {}
+        for k, cond in zip(k_values, cond_numbers):
+            cv = stability_results[k]["cv"]
+            stability_pass = (cond <= max_cond) and (cv <= max_cv)
+
+            V_k, eigenvalues_k = V_full[:, :k], eigenvalues_full[:k]
+            whitened_val = embedded_val @ V_k / eigenvalues_k.sqrt()
+            purity = _knn_label_purity(whitened_val, y_val, k=5)
+
+            ratio_summary = None
+            if stability_pass:
+                precision = V_k @ torch.diag(1.0 / eigenvalues_k) @ V_k.T
+                distance_fn = make_mahalanobis_distance_fn(precision, embed_fn=embed_fn)
+                ratio_result = run_ratio_distribution_analysis(
+                    lr_model, "logistic_regression", f"truncated_mahalanobis_{name}_k{k}",
+                    test.x_flat, test.y, distance_fn,
+                    n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+                ratio_summary = ratio_result["summary"]
+                ratio_arrays.update(ratio_result["arrays"])
+            elif verbose:
+                print(f"  {name} k={k}: stability did not pass (cond={cond:.4g}, cv={cv:.4f}) "
+                      f"-- skipping ratio-distribution")
+
+            k_results[k] = {
+                "cond": cond, "cv": cv, "stability_pass": stability_pass,
+                "knn_label_purity": purity, "ratio_summary": ratio_summary,
+            }
+
+        feature_space_results[name] = k_results
+
+    with open(RESULTS_DIR / "truncated_mahalanobis_sweep_results.json", "w") as f:
+        json.dump(feature_space_results, f, indent=2)
+    np.savez(RESULTS_DIR / "truncated_mahalanobis_sweep_arrays.npz", **ratio_arrays)
+
+    stability_fig = plot_truncated_mahalanobis_stability_sweep(
+        feature_space_results, max_cv=max_cv,
+        save_path=RESULTS_DIR / "truncated_mahalanobis_stability_sweep.png")
+    ratio_fig = plot_truncated_mahalanobis_ratio_sweep(
+        feature_space_results, save_path=RESULTS_DIR / "truncated_mahalanobis_ratio_sweep.png")
+
+    if verbose:
+        print(f"\nSaved results to {RESULTS_DIR}")
+
+    return {"feature_space_results": feature_space_results, "stability_figure": stability_fig,
+            "ratio_figure": ratio_fig, "lr_model": lr_model, "train": train, "test": test}
 
 
 def run_stronger_cnn_raw_mnist_experiment(

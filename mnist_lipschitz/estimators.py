@@ -231,16 +231,30 @@ def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None, e
       (P = Sigma^{-1}, the same P used directly as the quadratic form in
       distance_fn's Mahalanobis distance):
 
-      - `embed_fn=None` (unchanged from before this generalization): `P`
-        is sized for raw x, and the dual-norm expression is
-        sqrt(grad^T P^{-1} grad) = sqrt(grad^T Sigma grad) -- note this
-        uses Sigma = P^{-1}, NOT P itself; inverting P a second time here
-        (rather than reusing Sigma from distance.py directly) is
-        deliberate for interface consistency (every estimator here takes
-        `precision`, matching pairwise_lipschitz's and
-        local_perturbation_lipschitz's Mahalanobis argument), and is
-        cheap: a 784x784 dense inverse takes ~10ms, negligible next to
-        model training/evaluation.
+      - `embed_fn=None`: `P` is sized for raw x, and the dual-norm
+        expression is sqrt(grad^T P^{-1} grad) = sqrt(grad^T Sigma grad)
+        -- note this uses Sigma = P^{-1}, NOT P itself; inverting P a
+        second time here (rather than reusing Sigma from distance.py
+        directly) is deliberate for interface consistency (every
+        estimator here takes `precision`, matching pairwise_lipschitz's
+        and local_perturbation_lipschitz's Mahalanobis argument).
+        Computed via `torch.linalg.pinv`, not `torch.linalg.inv`: for a
+        full-rank `P` (every ridge-regularized `svd_ridge_precision`
+        matrix -- `epsilon > 0` always shifts every eigenvalue away from
+        0) the Moore-Penrose pseudoinverse is mathematically identical to
+        the ordinary inverse, so this is a strict generalization, not a
+        behavior change, for every pre-existing caller (checked directly
+        in `tests/test_estimators.py`, not just asserted). It also
+        correctly handles `distance.py::truncated_precision`'s
+        deliberately rank-deficient `P` (only the top-k eigendirections
+        retained, the rest discarded entirely rather than regularized):
+        `pinv` there gives the *minimum-norm* Sigma, which treats the
+        discarded directions' contribution to `Sigma` as exactly 0 rather
+        than raising (`inv` would) or blowing up to infinity -- exactly
+        the intended reading of "this metric cannot see gradient
+        components outside the directions it retains," not "the
+        Lipschitz constant is undefined/infinite whenever the gradient
+        has any component off the retained subspace."
       - `embed_fn` given: `P` is sized for the *embedded* feature space
         (`embed_fn(x).shape[-1]`), e.g.
         `embeddings.py::elementwise_embedding`. The distance being
@@ -251,8 +265,13 @@ def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None, e
         on raw x is `Q(x) = J(x)^T @ P @ J(x)` -- generally **different
         per point** (unlike the fixed Sigma above) whenever embed_fn is
         nonlinear, since J(x) itself depends on x. The dual norm is then
-        `sqrt(grad^T Q(x)^-1 grad)`, computed via a batched linear solve
-        rather than forming `Q(x)^-1` explicitly. `J(x)` is computed via
+        `sqrt(grad^T Q(x)^-1 grad)`, computed via a batched pseudoinverse
+        (`torch.linalg.pinv`, same full-rank-equivalence/rank-deficient-
+        handling reasoning as the `embed_fn=None` case above -- `Q(x)` is
+        singular whenever `P` is rank-deficient with rank less than the
+        raw input dimension, even if `P` itself is comparatively large,
+        since `rank(J^T P J) <= rank(P)`) rather than forming `Q(x)^-1`
+        explicitly via a linear solve. `J(x)` is computed via
         `torch.func.jacrev`/`vmap`, so this works for *any* embed_fn, not
         just a specific structural form (e.g. elementwise powers) --
         genuine automatic differentiation through embed_fn, not a
@@ -295,7 +314,7 @@ def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None, e
             return grad.norm(p=2, dim=-1)
 
         if embed_fn is None:
-            sigma = torch.linalg.inv(precision)  # P^{-1}, i.e. Sigma itself -- see docstring
+            sigma = torch.linalg.pinv(precision)  # pinv(P) -- Sigma for full-rank P, minimum-norm generalization for rank-deficient P; see docstring
             quad = torch.einsum("ni,ij,nj->n", grad, sigma, grad)
             return quad.clamp_min(0.0).sqrt()
 
@@ -304,7 +323,8 @@ def gradient_norm_estimate(model, x_batch, y_batch, output_fn, precision=None, e
         J = torch.func.vmap(jacobian_fn)(x_detached)  # (N, D, d): D = embed_fn output dim, d = input dim
         Q = torch.einsum("nDi,DE,nEj->nij", J, precision, J)  # (N, d, d), the per-point pullback metric
 
-        u = torch.linalg.solve(Q, grad.unsqueeze(-1)).squeeze(-1)  # Q(x)^-1 @ grad, per point
+        Q_pinv = torch.linalg.pinv(Q)  # pinv(Q(x)), same full-rank-equivalence/rank-deficient reasoning as above
+        u = torch.einsum("nij,nj->ni", Q_pinv, grad)  # pinv(Q(x)) @ grad, per point
         quad = (grad * u).sum(dim=-1)
         return quad.clamp_min(0.0).sqrt()
 

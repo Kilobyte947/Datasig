@@ -176,6 +176,88 @@ def test_gradient_norm_estimate_mahalanobis_matches_independent_closed_form():
     assert abs(margin_diff / maha_dist.item() - expected) < 1e-6
 
 
+# --- Checkpoint: rank-deficient precision (distance.py::truncated_precision) ---
+#
+# gradient_norm_estimate's Mahalanobis path used torch.linalg.inv(precision) until
+# distance.py::truncated_precision (a deliberately rank-deficient precision matrix -- only the
+# top-k eigendirections retained, the rest discarded rather than ridge-regularized) made that raise
+# on a singular matrix. Switched to torch.linalg.pinv, which is mathematically identical to inv for
+# every pre-existing full-rank caller (already re-verified above, unchanged tolerances) and gives
+# the mathematically correct reading for a rank-deficient P: gradient components outside the
+# retained subspace contribute exactly 0 to the estimate, not undefined/infinite sensitivity.
+
+def test_gradient_norm_estimate_rank_deficient_precision_ignores_discarded_directions():
+    """Independent closed-form check, built without relying on distance.py::truncated_precision or
+    gradient_norm_estimate's own pinv call as the oracle: a hand-built rank-2 precision matrix
+    (dims 0/1 retained with known eigenvalues, dims 2-4 discarded entirely) against a model whose
+    gradient (w_diff) is exactly known and has nonzero components in the discarded dims too --
+    verifying the discarded components truly contribute 0, not that they're merely small."""
+    d = 5
+    torch.manual_seed(11)
+    model, w_diff, _ = _linear_margin_setup(d=d, seed=11)
+    x_batch = torch.randn(3, d)
+    y_batch = torch.zeros(3, dtype=torch.int64)
+
+    eigenvalues_k = torch.tensor([2.0, 5.0])
+    V_k = torch.eye(d)[:, :2]
+    precision = V_k @ torch.diag(1.0 / eigenvalues_k) @ V_k.T
+    assert torch.linalg.matrix_rank(precision).item() == 2
+
+    # sanity: w_diff must actually have a nonzero component in the discarded directions, otherwise
+    # this test can't distinguish "correctly ignores them" from "there was nothing to ignore"
+    assert w_diff[2:].abs().sum().item() > 1e-3
+
+    L_hat = gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=precision)
+
+    # Hand-derived via plain scalar arithmetic, not torch.linalg.pinv: pinv(P) restricted to the
+    # retained subspace uses the eigenvalues directly (not 1/eigenvalue), and 0 elsewhere.
+    expected = (w_diff[0]**2 * eigenvalues_k[0] + w_diff[1]**2 * eigenvalues_k[1]).sqrt().item()
+    assert torch.allclose(L_hat, torch.full((3,), expected), atol=1e-8)
+
+
+def test_gradient_norm_estimate_embed_fn_rank_deficient_precision_matches_manual_jacobian():
+    """Same rank-deficiency check as above, but through the embed_fn pullback path (Q(x) = J^T @ P
+    @ J is *also* singular whenever P is rank-deficient, even for a nonlinear, per-point-varying J
+    -- see gradient_norm_estimate's docstring). Reuses
+    test_gradient_norm_estimate_embed_fn_elementwise_matches_manual_jacobian's hand-derived Q(x)
+    construction (independent of gradient_norm_estimate's own jacrev/vmap), only building `Q` itself
+    manually; only the final pinv-vs-solve step is shared with gradient_norm_estimate's own
+    implementation, since a genuinely independent pinv oracle isn't practical here -- the embed_fn=
+    None test above already independently validates the pinv-based null-space handling itself via
+    plain scalar arithmetic, so this test's job is confirming that handling survives the nonlinear
+    Jacobian pullback machinery intact, not re-deriving it from scratch."""
+    d, degree = 5, 3
+    D = d * degree
+    torch.manual_seed(19)
+    model, w_diff, _ = _linear_margin_setup(d=d, seed=19)
+    x_batch = torch.rand(4, d) + 0.5
+    y_batch = torch.zeros(4, dtype=torch.int64)
+
+    # rank-3 precision in the 15-dim embedded space (rank < d=5, so Q, a (5,5) matrix, is
+    # guaranteed singular: rank(Q) <= rank(precision) = 3)
+    B = torch.randn(D, 3)
+    eigenvalues_k = torch.tensor([1.5, 3.0, 0.5])
+    V_k, _ = torch.linalg.qr(B)  # orthonormal basis for a random rank-3 subspace of R^D
+    precision = V_k @ torch.diag(1.0 / eigenvalues_k) @ V_k.T
+    assert torch.linalg.matrix_rank(precision).item() == 3
+
+    embed_fn = lambda x: elementwise_embedding(x, degree)
+    L_hat = gradient_norm_estimate(model, x_batch, y_batch, margin_fn, precision=precision, embed_fn=embed_fn)
+
+    P_blocks = precision.reshape(degree, d, degree, d)
+    expected = torch.empty(4)
+    for n in range(4):
+        xn = x_batch[n]
+        scale = torch.stack([(k + 1) * xn ** k for k in range(degree)], dim=0)
+        Q = torch.einsum("ki,kimj,mj->ij", scale, P_blocks, scale)  # (d, d), singular by construction
+        assert torch.linalg.matrix_rank(Q, atol=1e-8).item() < d
+        u = torch.linalg.pinv(Q) @ w_diff
+        expected[n] = (w_diff @ u).clamp_min(0.0).sqrt()
+
+    assert torch.allclose(L_hat, expected, atol=1e-6)
+    assert torch.isfinite(L_hat).all()
+
+
 def test_gradient_norm_estimate_embed_fn_identity_matches_raw_pixel_formula():
     """embed_fn=<identity> must reduce exactly to the embed_fn=None formula on the same precision matrix --
     identity has a constant Jacobian J(x)=I, so the pullback metric Q(x)=J^T@P@J collapses to P itself, matching

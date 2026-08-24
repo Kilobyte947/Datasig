@@ -1,0 +1,162 @@
+{
+  "raw_pixels": {
+    "5": {
+      "cond": 2.0195372440837343,
+      "cv": 0.07352674738113224,
+      "stability_pass": false,
+      "knn_label_purity": 0.6302,
+      "ratio_summary": null
+    },
+    "10": {
+      "cond": 4.118769657881075,
+      "cv": 0.0545878385541917,
+      "stability_pass": false,
+      "knn_label_purity": 0.78,
+      "ratio_summary": null
+    },
+    "20": {
+      "cond": 8.608601575641648,
+      "cv": 0.04954156625171018,
+      "stability_pass": true,
+      "knn_label_purity": 0.8234,
+      "ratio_summary": {
+        "all_pairs_mean": 0.5504793939657802,
+        "all_pairs_max": 5.479484335672838,
+        "near_neighbor_mean": 0.6492425550552782,
+        "near_neighbor_max": 5.479484335672838,
+        "n_all_pairs": 44850,
+        "n_near_neighbor_pairs": 1500
+      }
+    },
+    "50": {
+      "cond": 28.861440563810426,
+      "cv": 0.04674937572013119,
+      "stability_pass": true,
+      "knn_label_purity": 0.7552,
+      "ratio_summary": {
+        "all_pairs_mean": 0.3436441133866659,
+        "all_pairs_max": 2.3840532416120657,
+        "near_neighbor_mean": 0.3323411647597869,
+        "near_neighbor_max": 2.3840532416120657,
+        "n_all_pairs": 44850,
+        "n_near_neighbor_pairs": 1500
+      }
+    },
+    "100": {
+      "cond": 96.68783058826773,
+      "cv": 0.04572979505164172,
+      "stability_pass": true,
+      "knn_label_purity": 0.6224,
+      "ratio_summary": {
+        "all_pairs_mean": 0.2447717726057963,
+        "all_pairs_max": 1.5610030917242712,
+        "near_neighbor_mean": 0.2117112202933149,
+        "near_neighbor_max": 1.3274070892097074,
+        "n_all_pairs": 44850,
+        "n_near_neighbor_pairs": 1500
+      }
+    },
+    "200": {
+      "cond": 347.12640513079697,
+      "cv": 1.0129497969198702,
+      "stability_pass": false,
+      "knn_label_purity": 0.3564,
+      "ratio_summary": null
+    }
+  },
+  "local_patch_cross_terms": {
+    "5": {
+      "cond": 1.895977705501791,
+      "cv": 0.10361339532019276,
+      "stability_pass": false,
+      "knn_label_purity": 0.5962,
+      "ratio_summary": null
+    },
+    "10": {
+      "cond": 4.132760724104536,
+      "cv": 0.08678513942132507,
+      "stability_pass": false,
+      "knn_label_purity": 0.7506,
+      "ratio_summary": null
+    },
+    "20": {
+      "cond": 8.496781213184406,
+      "cv": 0.09343075762321341,
+      "stability_pass": false,
+      "knn_label_purity": 0.7894,
+      "ratio_summary": null
+    },
+    "50": {
+      "cond": 25.29775100172671,
+      "cv": 0.06462104349832298,
+      "stability_pass": false,
+      "knn_label_purity": 0.6948,
+      "ratio_summary": null
+    },
+    "100": {
+      "cond": 80.4178581801553,
+      "cv": 1.0416340523990026,
+      "stability_pass": false,
+      "knn_label_purity": 0.5808,
+      "ratio_summary": null
+    },
+    "200": {
+      "cond": 281.988414735004,
+      "cv": 0.043236703633535906,
+      "stability_pass": true,
+      "knn_label_purity": 0.4054,
+      "ratio_summary": {
+        "all_pairs_mean": 0.1717582073224499,
+        "all_pairs_max": 1.040905364951277,
+        "near_neighbor_mean": 0.1386595862455739,
+        "near_neighbor_max": 0.938316020135987,
+        "n_all_pairs": 44850,
+        "n_near_neighbor_pairs": 1500
+      }
+    }
+  },
+  "smoothed_cross_terms_sigma1": {
+    "5": {
+      "cond": 2.323689769185879,
+      "cv": 0.10774937850512625,
+      "stability_pass": false,
+      "knn_label_purity": 0.6046,
+      "ratio_summary": null
+    },
+    "10": {
+      "cond": 5.8024616024253,
+      "cv": 0.08337217863693507,
+      "stability_pass": false,
+      "knn_label_purity": 0.767,
+      "ratio_summary": null
+    },
+    "20": {
+      "cond": 14.48352698175233,
+      "cv": 0.07591697204525222,
+      "stability_pass": false,
+      "knn_label_purity": 0.7948,
+      "ratio_summary": null
+    },
+    "50": {
+      "cond": 77.70985146674344,
+      "cv": 0.05978703028074596,
+      "stability_pass": false,
+      "knn_label_purity": 0.6938,
+      "ratio_summary": null
+    },
+    "100": {
+      "cond": 406.9417985410633,
+      "cv": 0.08814841024727593,
+      "stability_pass": false,
+      "knn_label_purity": 0.6526,
+      "ratio_summary": null
+    },
+    "200": {
+      "cond": 2827.0108443286745,
+      "cv": 0.09419995638235834,
+      "stability_pass": false,
+      "knn_label_purity": 0.4862,
+      "ratio_summary": null
+    }
+  }
+}

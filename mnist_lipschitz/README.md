@@ -634,6 +634,69 @@ Mahalanobis instability without fixing it, and the Euclidean side-channel it doe
 carrying new signal. See `notebook_smoothing.ipynb`'s "Overall verdict" section for the full
 numeric decomposition and both galleries.
 
+## Sub-experiment: truncated-eigenvalue Mahalanobis (verdict: fixes it for raw pixels and narrowly for `local_patch_cross_terms`, not for the smoothed variant)
+
+`distance.py`/`notebook_truncated_mahalanobis.ipynb` tries a structurally different fix for the
+same epsilon-selection instability the smoothing sub-experiment above only partially addressed.
+`svd_ridge_precision`'s ridge regularization *stabilizes* near-singular covariance directions by
+adding `epsilon`; `truncated_precision(x_flat, k)` instead **discards** the bottom `D-k`
+directions entirely, keeping only the top-`k` eigenvectors/eigenvalues (`P = V_k @
+diag(1/eigenvalues_k) @ V_k^T`, a genuinely rank-`k`, not just ill-conditioned, precision matrix).
+Since this is mathematically still Mahalanobis distance, just with a different precision matrix,
+it reuses `make_mahalanobis_distance_fn`/`mahalanobis_distance` directly rather than a new distance
+formula — and required one safety-critical fix to make that reuse actually work: `gradient_norm_estimate`'s Mahalanobis path used `torch.linalg.inv`, which raises on a
+singular matrix; switched to `torch.linalg.pinv`, which is mathematically identical to `inv` for
+every pre-existing full-rank precision matrix (re-verified via the full existing test suite at
+unchanged tight tolerances) and gives the mathematically correct "minimum-norm" reading for a
+rank-deficient one — gradient components outside the retained subspace contribute exactly 0 to the
+Lipschitz estimate, not an undefined or infinite value. Two new closed-form checkpoint tests cover
+this directly (`tests/test_estimators.py`), independent of `truncated_precision`'s own
+implementation.
+
+`k_stability_check` (`run_experiment.py`) is the `k`-sweep analogue of `epsilon_stability_check`,
+sharing one SVD per resampled subsample across every `k` tested (unlike `epsilon_stability_check`,
+which redraws per epsilon candidate) — different `k`'s are nested truncations of the same SVD, so
+this is both cheaper and a fairer comparison (same resampling draws across `k`). Swept `k` in `{5,
+10, 20, 50, 100, 200}` against three feature spaces, checking each `(feature_space, k)` combination
+individually against the same `cv<=0.05` stability bound used everywhere else in this project:
+
+| feature_space | k | cv | stability_pass | purity | near/all |
+|---|---|---|---|---|---|
+| raw_pixels | 20 | 0.0495 | **True** | 0.8234 | 1.1794 |
+| raw_pixels | 50 | 0.0467 | **True** | 0.7552 | 0.9671 |
+| raw_pixels | 100 | 0.0457 | **True** | 0.6224 | 0.8649 |
+| local_patch_cross_terms | 200 | 0.0432 | **True** | 0.4054 | 0.8073 |
+| smoothed_cross_terms_sigma1 | (all 6) | 0.0598 best (k=50) | False | -- | -- |
+
+(Full 18-row table, including every failing `k`, in `notebook_truncated_mahalanobis.ipynb`.)
+
+**Fixes the instability, but not uniformly.** Raw pixels (already fine under ridge — included as a
+sanity check, not itself a finding) pass at 3 of 6 `k` values, confirming truncation behaves
+sensibly where regularization already worked; `k=200` fails there (cv jumps to 1.01), since raw
+pixel covariance is itself rank-deficient (constant-zero border pixels), so pushing `k` too high
+starts pulling in near-zero eigenvalues and reintroduces the exact problem truncation exists to
+avoid — stability is not monotonic in `k`. `local_patch_cross_terms` — categorically failed *every*
+epsilon under ridge (cv 0.91-1.45) — gets exactly one passing `k` (200, cv=0.0432): the first
+Mahalanobis-based result ever obtained for this embedding in this project. Not monotonic either:
+`k=100` spikes to cv=1.04, worse than the `k`'s on either side, consistent with a known SVD
+phenomenon where near-degenerate eigenvalues near a truncation boundary make exactly which
+eigenvectors land just inside vs. outside the cutoff unstable across resamples. The smoothed
+variant — the *closest* case under ridge (best cv=0.0754 at `sigma=1`) — never passes under
+truncation either (best cv=0.0598 at `k=50`); smoothing and truncation don't combine additively,
+and the smoothed embedding's truncated stability is worse than the unsmoothed embedding's at every
+`k` tested.
+
+**Where it passes, the signal is consistent with an already-independently-verified mechanism, not
+a new anomaly.** `results/mahalanobis_flip_mechanism.md`'s eigenbasis investigation confirmed
+near-neighbor pairs' pixel differences load more heavily on low-variance directions, so full
+Mahalanobis distance shrinks their ratio relative to the general population — near/all *below* 1,
+opposite of every Euclidean-family metric here. All four passing rows track that same reversal as
+`k` grows: raw_pixels `k=20` (1.18, still Euclidean-like — too few retained dimensions to capture
+much low-variance amplification yet) → `k=50` (0.97) → `k=100` (0.87), and
+`local_patch_cross_terms` `k=200` lands at 0.81. This is a genuine, positive validation of the
+already-confirmed mechanism generalizing to truncated Mahalanobis, not a new kind of signal this
+method uniquely reveals.
+
 ## Limitations and open questions
 
 - **Sub-method disagreement (4-14x) is larger here than in the toy

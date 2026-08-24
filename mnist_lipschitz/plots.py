@@ -685,3 +685,73 @@ def plot_smoothing_ratio_sweep(sweep_rows, save_path=None):
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_truncated_mahalanobis_stability_sweep(feature_space_results, max_cv=0.05, save_path=None):
+    """Epsilon-selection-stability analogue for `notebook_truncated_mahalanobis.ipynb`: coefficient
+    of variation vs. `k` (number of retained top-variance dimensions), one line per feature space --
+    tests whether discarding low-variance directions entirely (rather than ridge-regularizing them,
+    `plot_smoothing_stability_sweep`'s subject) actually fixes the categorical epsilon-selection
+    instability `local_patch_cross_terms`/its smoothed variant showed under ridge regularization.
+
+    `feature_space_results`: dict `{name: {k: {"cv": ..., ...}}}` -- matches
+    `run_experiment.py::run_truncated_mahalanobis_sweep`'s own per-feature-space, per-k result
+    structure directly, no reshaping needed at the call site.
+    """
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    for name, k_results in feature_space_results.items():
+        k_values = sorted(k_results.keys())
+        cvs = [k_results[k]["cv"] for k in k_values]
+        ax.plot(k_values, cvs, marker="o", label=name)
+    ax.axhline(max_cv, color="gray", linestyle="--", label=f"stability bound (cv<={max_cv})")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("k (retained top-variance dimensions)")
+    ax.set_ylabel("coefficient of variation")
+    ax.set_title("Truncated-eigenvalue Mahalanobis: epsilon-selection-check stability vs. k")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_truncated_mahalanobis_ratio_sweep(feature_space_results, save_path=None):
+    """Validation quality (`knn_label_purity`, left) and the ratio-distribution near/all elevation
+    (right, only plotted at `k` values where stability actually passed -- a gap in the line means
+    skipped, not a measured value of 0) vs. `k`, one line per feature space. Same two-panel layout
+    as `plot_smoothing_ratio_sweep`, for a directly comparable read.
+
+    `feature_space_results`: dict `{name: {k: {"knn_label_purity": ..., "ratio_summary": ... or
+    None, ...}}}`, matching `run_experiment.py::run_truncated_mahalanobis_sweep`'s result structure.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    for name, k_results in feature_space_results.items():
+        k_values = sorted(k_results.keys())
+        purities = [k_results[k]["knn_label_purity"] for k in k_values]
+        ax1.plot(k_values, purities, marker="o", label=name)
+
+        passing_k = [k for k in k_values if k_results[k]["ratio_summary"] is not None]
+        if passing_k:
+            near_over_all = [k_results[k]["ratio_summary"]["near_neighbor_mean"] / k_results[k]["ratio_summary"]["all_pairs_mean"]
+                              for k in passing_k]
+            ax2.plot(passing_k, near_over_all, marker="s", label=name)
+
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xscale("log")
+    ax1.set_xlabel("k")
+    ax1.set_ylabel("knn_label_purity (k=5, whitened truncated-Mahalanobis coordinates)")
+    ax1.set_title("Validation quality vs. k")
+    ax1.legend(fontsize=8)
+
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xscale("log")
+    ax2.set_xlabel("k")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation vs. k (stable k only)")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("Truncated-eigenvalue Mahalanobis: does discarding low-variance directions fix the instability?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
