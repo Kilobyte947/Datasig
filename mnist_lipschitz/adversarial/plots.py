@@ -502,3 +502,211 @@ def plot_bound_closeness_vs_width_with_spread(per_config_df, epsilon=None, metri
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# StrongCNN multi-seed sweep (strong_cnn_seed_sweep.py) -- FIXED architecture, five training
+# seeds, common evaluation pool (see that module's top docstring for Goals A/B). Consumes
+# strong_cnn_seed_sweep's tidy R_adv table / stats tables directly, not this file's other
+# sweep_results/summary_df/combined_df shapes.
+# ---------------------------------------------------------------------------
+
+SEED_COLORS = {0: "tab:blue", 1: "tab:orange", 2: "tab:green", 3: "tab:red", 4: "tab:purple"}
+
+
+def plot_strong_cnn_seed_sweep_r_adv_outcome_grid(df, save_path=None):
+    """Grid of R_adv-by-outcome histograms, one panel per (seed, epsilon x metric) -- rows are
+    seeds, columns are the four (epsilon, metric) combinations, mirroring
+    `plot_R_adv_histogram_by_outcome`'s green/red (not-misclassified/misclassified) stacked-hist
+    convention per panel, but laid out as ONE grid (plan Checkpoint 6, point 1) instead of 20
+    separate figures.
+
+    `df`: `strong_cnn_seed_sweep.build_r_adv_table`'s tidy per-example table.
+    """
+    seeds = sorted(df["seed"].unique())
+    epsilons = sorted(df["epsilon"].unique())
+    metrics = (("R_adv_euclidean", "Euclidean"), ("R_adv_mahalanobis", "Mahalanobis"))
+    cols = [(eps, col, name) for eps in epsilons for col, name in metrics]
+
+    fig, axes = plt.subplots(len(seeds), len(cols), figsize=(4 * len(cols), 3 * len(seeds)),
+                              squeeze=False)
+
+    for row, seed in enumerate(seeds):
+        for c, (epsilon, col, metric_name) in enumerate(cols):
+            ax = axes[row][c]
+            case = df[(df["seed"] == seed) & (df["epsilon"] == epsilon)]
+            R = case[col].to_numpy()
+            is_misclassified = case["is_misclassified"].to_numpy()
+            correct, misclassified = R[~is_misclassified], R[is_misclassified]
+            bin_edges = np.histogram_bin_edges(R, bins=20)
+            ax.hist([correct, misclassified], bins=bin_edges, stacked=True,
+                    color=["tab:green", "tab:red"])
+            if row == 0:
+                ax.set_title(f"epsilon={epsilon:g}\n{metric_name}", fontsize=9)
+            if c == 0:
+                ax.set_ylabel(f"seed={seed}\ncount", fontsize=8)
+
+    fig.suptitle("StrongCNN seed sweep: R_adv distribution by attack outcome "
+                 "(green=correct, red=misclassified)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_strong_cnn_seed_sweep_cross_seed_overlay(df, save_path=None):
+    """THE PRIMARY FIGURE for Goal B: unconditional R_adv distributions for all five seeds
+    overlaid on one axis, one panel per (epsilon, metric) -- since every seed is evaluated on the
+    IDENTICAL common pool (`strong_cnn_seed_sweep.build_common_pool`), any visible separation
+    between the five curves is genuine seed-to-seed variation, not a pool-composition artifact.
+    Uses `is_misclassified`-unconditional R_adv (the full column), matching plan section 7.1's
+    "only genuinely apples-to-apples cross-seed statistic."
+    """
+    epsilons = sorted(df["epsilon"].unique())
+    metrics = (("R_adv_euclidean", "Euclidean"), ("R_adv_mahalanobis", "Mahalanobis"))
+    seeds = sorted(df["seed"].unique())
+
+    fig, axes = plt.subplots(len(epsilons), len(metrics),
+                              figsize=(6 * len(metrics), 4.5 * len(epsilons)), squeeze=False)
+
+    for row, epsilon in enumerate(epsilons):
+        for col_idx, (col, metric_name) in enumerate(metrics):
+            ax = axes[row][col_idx]
+            eps_df = df[df["epsilon"] == epsilon]
+            bin_edges = np.histogram_bin_edges(eps_df[col].to_numpy(), bins=30)
+            for seed in seeds:
+                values = eps_df[eps_df["seed"] == seed][col].to_numpy()
+                ax.hist(values, bins=bin_edges, histtype="step", density=True, linewidth=1.5,
+                        color=SEED_COLORS.get(seed, "tab:gray"), label=f"seed={seed}")
+            ax.set_xlabel(f"R_adv ({metric_name.lower()} distance)")
+            ax.set_ylabel("density")
+            ax.set_title(f"epsilon={epsilon:g}, {metric_name}")
+            ax.legend(fontsize=7)
+
+    fig.suptitle("StrongCNN seed sweep: unconditional R_adv across seeds (identical common pool)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_strong_cnn_seed_sweep_euclidean_vs_mahalanobis(primary_stats_df, bounds_df, stat="p99",
+                                                          save_path=None):
+    """THE PRIMARY FIGURE for Goal A: per-seed `stat` (default p99, this sweep's headline
+    statistic -- see plan section 7.1) grouped bars, Euclidean vs. Mahalanobis, one panel per
+    epsilon, with each seed's OWN `L_full_estimated` (from `per_seed_bounds`, NOT a single shared
+    reference line -- the bound is seed-dependent) overlaid as a marker at that seed's bar
+    position, per metric.
+
+    `primary_stats_df`: concatenation of `strong_cnn_seed_sweep.primary_r_adv_stats`'s Euclidean
+    and Mahalanobis outputs (columns seed, epsilon, median, p95, p99, max, metric).
+    `bounds_df`: `strong_cnn_seed_sweep.per_seed_bounds`'s output (columns seed, metric,
+    L_full_estimated, ...).
+    """
+    epsilons = sorted(primary_stats_df["epsilon"].unique())
+    seeds = sorted(primary_stats_df["seed"].unique())
+    width = 0.35
+
+    fig, axes = plt.subplots(1, len(epsilons), figsize=(6 * len(epsilons), 5), squeeze=False)
+    axes = axes[0]
+
+    for ax, epsilon in zip(axes, epsilons):
+        eps_df = primary_stats_df[primary_stats_df["epsilon"] == epsilon]
+        x = np.arange(len(seeds))
+        for offset, metric_name, color in ((-width / 2, "Euclidean", "tab:blue"),
+                                            (width / 2, "Mahalanobis", "tab:orange")):
+            metric_df = eps_df[eps_df["metric"] == metric_name].set_index("seed").loc[seeds]
+            ax.bar(x + offset, metric_df[stat], width, label=f"{metric_name} ({stat})", color=color, alpha=0.7)
+
+            bounds_metric = bounds_df[bounds_df["metric"] == metric_name].set_index("seed").loc[seeds]
+            ax.scatter(x + offset, bounds_metric["L_full_estimated"], marker="_", s=400,
+                       color="black", linewidths=2,
+                       label=f"L_full_estimated ({metric_name})" if ax is axes[0] else None)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"seed={s}" for s in seeds])
+        ax.set_ylabel(f"{stat}(R_adv)")
+        ax.set_title(f"epsilon={epsilon:g}")
+        ax.legend(fontsize=7)
+
+    fig.suptitle(f"StrongCNN seed sweep: {stat}(R_adv) vs. L_full_estimated, "
+                 f"Euclidean vs. Mahalanobis, per seed")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_strong_cnn_seed_sweep_summary_table(summary_df, save_path=None):
+    """Renders `strong_cnn_seed_sweep.build_project1_summary_table`'s one-row-per-seed DataFrame
+    as a plain matplotlib table figure -- the Project-1 punchline figure (plan Checkpoint 6, point
+    5): clean accuracy, adversarial accuracy, and a high quantile of the local Lipschitz estimate,
+    across models with matched clean accuracy.
+    """
+    fig, ax = plt.subplots(figsize=(1.6 * len(summary_df.columns), 0.6 * (len(summary_df) + 1)))
+    ax.axis("off")
+    display_df = summary_df.round(4)
+    table = ax.table(cellText=display_df.values, colLabels=display_df.columns,
+                      cellLoc="center", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.5)
+    fig.suptitle("StrongCNN seed sweep: summary (Project 1 punchline)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Transferability check (strong_cnn_seed_sweep.run_transfer_attack/summarize_transfer_attack) --
+# fixed adversarial examples crafted against ONE seed, evaluated on every seed's own model.
+# ---------------------------------------------------------------------------
+
+def plot_transfer_attack(summary_df, source_seed, save_path=None):
+    """Two-row grid, one column per epsilon: top row is `transfer_accuracy` vs. `eval_seed` (the
+    fraction of the pool each seed's model still gets right despite the `source_seed`-crafted
+    perturbation -- the `eval_seed == source_seed` bar, outlined in black, is the ordinary,
+    non-transfer adversarial accuracy and is not expected to be higher or lower than the others a
+    priori); bottom row is `p99(R_adv)` vs. `eval_seed`, Euclidean vs. Mahalanobis side by side
+    (each seed's own logits on the fixed image pair).
+
+    `summary_df`: `strong_cnn_seed_sweep.summarize_transfer_attack`'s output -- needs
+    `source_seed`, `eval_seed`, `epsilon`, `transfer_accuracy`, `p99_R_adv_euclidean`,
+    `p99_R_adv_mahalanobis`. Filtered here to `source_seed` (one source at a time, matching this
+    file's other single-condition-per-call plotting convention).
+    """
+    sub_all = summary_df[summary_df["source_seed"] == source_seed]
+    epsilons = sorted(sub_all["epsilon"].unique())
+
+    fig, axes = plt.subplots(2, len(epsilons), figsize=(6 * len(epsilons), 9), squeeze=False)
+
+    for col, epsilon in enumerate(epsilons):
+        sub = sub_all[sub_all["epsilon"] == epsilon].sort_values("eval_seed")
+        eval_seeds = sub["eval_seed"].tolist()
+
+        ax_acc = axes[0][col]
+        colors = [SEED_COLORS.get(s, "tab:gray") for s in eval_seeds]
+        bars = ax_acc.bar([str(s) for s in eval_seeds], sub["transfer_accuracy"], color=colors)
+        for bar, seed in zip(bars, eval_seeds):
+            if seed == source_seed:
+                bar.set_edgecolor("black")
+                bar.set_linewidth(2.5)
+        ax_acc.set_xlabel("eval_seed")
+        ax_acc.set_ylabel("transfer_accuracy")
+        ax_acc.set_title(f"epsilon={epsilon:g}")
+
+        ax_sens = axes[1][col]
+        width = 0.35
+        x = list(range(len(sub)))
+        ax_sens.bar([xi - width / 2 for xi in x], sub["p99_R_adv_euclidean"], width,
+                    label="Euclidean", color="tab:blue")
+        ax_sens.bar([xi + width / 2 for xi in x], sub["p99_R_adv_mahalanobis"], width,
+                    label="Mahalanobis", color="tab:orange")
+        ax_sens.set_xticks(x)
+        ax_sens.set_xticklabels([str(s) for s in eval_seeds])
+        ax_sens.set_xlabel("eval_seed")
+        ax_sens.set_ylabel("p99(R_adv)")
+        ax_sens.legend(fontsize=8)
+
+    fig.suptitle(f"Transfer attack: adversarial examples crafted against seed={source_seed}, "
+                 f"evaluated on every seed's own model (black outline = source seed itself)")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

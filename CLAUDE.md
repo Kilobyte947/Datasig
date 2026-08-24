@@ -100,7 +100,10 @@ in its own module docstring/README section, not exhaustively here — read those
   approaches the tight (`L_full_estimated`) vs. loose (`product_bound`) Lipschitz bounds, under
   both Euclidean and Mahalanobis distance. `strong_cnn_experiment.py` repeats the same comparison
   for `StrongCNN` via an externally-built extractor/head split, since `StrongCNN` itself has no
-  `.extractor`/`.head` attributes. Read `mnist_lipschitz/adversarial/README.md` before changing
+  `.extractor`/`.head` attributes; `strong_cnn_seed_sweep.py` extends that to five independently
+  trained `StrongCNN` seeds, checking whether the Euclidean-vs-Mahalanobis gap-narrowing effect
+  reproduces and how much adversarial sensitivity varies given matched clean accuracy. Read
+  `mnist_lipschitz/adversarial/README.md` before changing
   anything here — it documents why the Mahalanobis repeat reuses the same checkpoints/adversarial
   examples rather than re-deriving them, and why `StrongCNN`'s functions raise on `model.training`
   instead of silently calling `.eval()`.

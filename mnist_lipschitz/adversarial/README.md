@@ -227,8 +227,8 @@ baseline comparison (single checkpoint, Euclidean + Mahalanobis, FGSM/PGD, WITH 
 bound comparison) for `StrongCNN` (`models.py`) — the project's higher-capacity,
 near-state-of-the-art baseline — instead of `SmallCNN`. **Deliberately out of scope**: any
 CNN-capacity/width sweep (`StrongCNN`'s conv channels are hardcoded, not a constructor parameter,
-unlike `SmallCNN`'s) and the multi-seed confirmation sweep (`seed_sweep.py`'s pattern, also
-`SmallCNN`-specific).
+unlike `SmallCNN`'s). The multi-seed confirmation sweep (`seed_sweep.py`'s pattern for `SmallCNN`)
+WAS since attempted for `StrongCNN` — see "StrongCNN multi-seed sweep" below.
 
 **Why this needed a separate module rather than reusing `run_experiment.py`/`layer_decomposition.py`
 directly**: `StrongCNN` has no `.extractor`/`.head` submodule split — `layer_decomposition.py`'s
@@ -307,9 +307,9 @@ in `notebook_adversarial_strongcnn.ipynb`'s own "Findings and observations" sect
 identity, eval-mode-matters, self-consistency parity, head-bound-check, feature-normalizer floor,
 end-to-end smoke). The notebook executes end to end with zero errors.
 
-**Explicitly out of scope, not attempted:** any CNN-capacity/width sweep; a multi-seed
-confirmation sweep; Carlini-Wagner or other attack methods; adversarial training or any other
-mitigation.
+**Explicitly out of scope, not attempted:** any CNN-capacity/width sweep; Carlini-Wagner or other
+attack methods; adversarial training or any other mitigation. (The multi-seed confirmation sweep
+WAS since attempted — see "StrongCNN multi-seed sweep" below.)
 
 **Worth revisiting:**
 - Why the Euclidean-vs-Mahalanobis gap-width effect flips direction between `StrongCNN` and
@@ -318,4 +318,111 @@ mitigation.
   modestly tightened `L_full_estimated`, while the achieved-vs-bound gap stayed large —
   consistent with the gap being intrinsic to random-pair sampling missing PGD's sharp
   sensitivity directions, not simple undersampling; not pushed further (e.g. 5000+ points).
-- This is a single-seed run — stability across seeds is unknown.
+- ~~This is a single-seed run — stability across seeds is unknown.~~ **Resolved** — see "StrongCNN
+  multi-seed sweep" below: the Euclidean-vs-Mahalanobis gap-narrowing direction reproduces in 5/5
+  independently-trained seeds and is stable across two Mahalanobis shrinkage values.
+
+## StrongCNN multi-seed sweep
+
+`strong_cnn_seed_sweep.py` + `notebook_strongcnn_seed_sweep.ipynb` trains five independent
+`StrongCNN` checkpoints (identical `STRONG_CNN_CONFIG` recipe, only the training seed varying —
+`seed_sweep.py`'s pattern, applied to `StrongCNN` for the first time) to ask two questions the
+single-seed run above couldn't: does the Euclidean-vs-Mahalanobis gap-narrowing flip reproduce, and
+is it robust to the Mahalanobis shrinkage parameter (**Goal A**); and, given clean test accuracy
+matched by construction across seeds, how much does adversarial sensitivity vary seed-to-seed
+(**Goal B**, this project's "similar accuracy, different extension behavior" claim in its cleanest
+form, since accuracy can't be a confound here). FGSM only (not PGD, to keep five full-pool attacks
+affordable), epsilons `{0.1, 0.2}`, a common evaluation pool (test images correctly classified by
+**all five** seeds) so every cross-seed R_adv comparison uses identical images. **Out of scope**:
+cross-architecture comparison against `SmallCNN` (accuracy isn't matched there, so it would
+confound Goal B).
+
+**Checkpoint-gated**, per this project's own methodology: 5 distinct checkpoints with distinct
+hashes; reload reproduces logged accuracy exactly; accuracy premise verified (`test_acc` range
+`[99.64%, 99.67%]`, spread 0.03pp, well under a 0.5pp threshold); common pool (9941/10000)
+programmatically verified correct under all 5 models; both R_adv metrics confirmed to share the
+same `x_adv` by construction; percentile computation hand-checked against `numpy.quantile`. 19
+tests in `tests/test_strong_cnn_seed_sweep.py`, all passing.
+
+**Goal A — reproduces in 5/5 seeds, at both attack epsilons, and at both Mahalanobis shrinkage
+values tested.** `ratio_to_L_full` (p99(R_adv) / `L_full_estimated`, mean across seeds):
+
+| epsilon | Euclidean | Mahalanobis (eps=0.01) | Mahalanobis (eps=0.1) |
+|---|---|---|---|
+| 0.1 | 2.63x | 1.04x | 1.65x |
+| 0.2 | 1.56x | 0.61x | 0.98x |
+
+`Mahalanobis (eps=0.01) < Mahalanobis (eps=0.1) < Euclidean` holds at every epsilon, in every
+seed — the gap-narrowing direction never flips across the shrinkage sweep. The *magnitude* is
+shrinkage-dependent (heavier regularization pulls the ratio toward the Euclidean value, as
+expected from `mahalanobis_distance`'s documented convergence to scaled Euclidean distance as
+epsilon grows), but the qualitative single-seed finding is not an artifact of one shrinkage choice.
+
+**Goal B — small cross-seed variation in the continuous R_adv/Lipschitz-bound quantities
+(single-digit % spreads), but a much larger relative spread in adversarial accuracy (~31-39%),
+even though clean accuracy is matched to within 0.03pp.** E.g. `looseness_ratio` (Euclidean:
+1.438-1.493, mean 1.471; Mahalanobis eps=0.01: 1.417-1.472, mean 1.441 — both close to the
+single-seed run's own 1.47x/1.36x) is tightly reproducible, while adversarial accuracy at
+epsilon=0.1 ranges 33.6%-46.2% across seeds. `by_outcome_split` shows why: misclassified points
+have a systematically smaller clean margin than correctly-classified ones in every seed, so a small
+seed-to-seed shift in exactly which points sit near a decision boundary moves the success rate
+substantially without moving the overall sensitivity distribution much. **Known limitation, stated
+explicitly**: no within-seed noise floor was computed (each seed evaluated once, not
+resampled against its own fixed weights), so this run cannot formally separate model-to-model
+variation from measurement/sampling noise — the same decomposition `seed_sweep.py`'s
+`run_attack_seed_variance_decomposition` provides for the `SmallCNN` width sweep was not attempted
+here.
+
+**Relation to Goodfellow et al. (2015)**: their ensemble finding — that independently-seeded
+models trained on the same task learn similar functions and share adversarial vulnerability — is
+supported at the level of the overall sensitivity distribution, and further supported by a large,
+robust common-success set (4018/9941 = 40.4% of the pool misclassified by **all five** seeds at
+epsilon=0.1; 7722/9941 = 77.7% at epsilon=0.2, both comfortably above this sweep's 50-image
+reliability floor). But it's complicated at the level of individual outcomes: which specific
+images flip at a fixed epsilon is more seed-sensitive than how sensitive the network is on
+average.
+
+**Realized vs. nominal perturbation norm**: no fix was needed. `achieved_ratio`'s denominator was
+already the realized `||x - x_adv||`, not a nominal `epsilon*sqrt(784)` value, confirmed by reading
+the implementation directly — so this sweep's numbers are directly comparable to the
+single-checkpoint run above. Realized/nominal ratio is consistently ~0.76-0.78 across every seed
+and epsilon (FGSM clips substantially, since most MNIST background pixels are already saturated).
+
+**Transferability — do seed=0's adversarial examples fool the OTHER seeds?**
+(`run_transfer_attack`/`summarize_transfer_attack`, opt-in, not part of `run_full_sweep`): fixes
+ONE seed's adversarial examples (attacking only `seed=0`) and evaluates every seed's own model on
+those SAME fixed images — a direct transferability measurement, rather than the indirect
+common-success-set overlap of five independently-crafted attacks above. **Yes, substantially, but
+consistently less effectively than attacking seed 0 directly**: `transfer_accuracy` (higher =
+attack less effective) is lowest at `eval_seed=0` (the self/non-transfer case) and highest at
+`eval_seed=4` at both epsilons tested (34.3% self vs. 57.8-68.4% transfer at epsilon=0.1; 10.1%
+self vs. 15.4-26.7% transfer at epsilon=0.2) — the attack degrades under transfer but stays
+substantial (40.7% average misclassification under transfer at epsilon=0.1, vs. 65.7% self).
+**R_adv itself barely changes between self-attack and transfer-attack** (`mean_R_adv_euclidean` at
+epsilon=0.2 ranges only 4.73-5.01 across all five `eval_seed` values, a ~5.5% spread comparable to
+Goal B's own cross-seed spread) even though `transfer_accuracy` varies by up to 34 percentage
+points — a fixed perturbation moves every model's logits by a similar amount regardless of which
+model it was crafted against, but whether that movement crosses the (seed-specific) decision
+boundary is far more sensitive to which model is doing the classifying. A more direct, causal
+version of the Goodfellow et al. (2015) relation discussed above: adversarial examples transfer
+across independently-trained models, but not perfectly.
+
+**Determinism caveat**: `torch.manual_seed` is set per training run, but
+`torch.use_deterministic_algorithms(True)` is not forced — CPU only, no CUDA available. The five
+checkpoints measure *training-run* variation (init + data order + residual CPU-arithmetic
+nondeterminism), not initialization-seed variation in strict isolation, which matches what Goal B
+is actually asking about.
+
+Full per-seed tables, the by-outcome/common-success-set breakdowns, and every plot are in
+`notebook_strongcnn_seed_sweep.ipynb`'s own "Findings and observations" section.
+
+**Status: confirmed working.** All 22 tests in `tests/test_strong_cnn_seed_sweep.py` pass. The
+notebook executes end to end with zero errors and regenerates every `results/strong_cnn_seed_sweep_*`
+artifact in place.
+
+**Explicitly out of scope, not attempted:** PGD (FGSM only); a cross-architecture comparison
+against `SmallCNN`; a within-seed noise-floor / attack-seed variance decomposition (see Goal B's
+stated limitation above); Mahalanobis shrinkage values beyond `{0.01, 0.1}`; transferability
+FROM any seed other than `0` (`run_transfer_attack`'s `source_seed` defaults to and was only run
+with `0`) and transferability under Mahalanobis-distance-aware attacks (FGSM/PGD here never
+optimize against the Mahalanobis metric, only against cross-entropy loss).
