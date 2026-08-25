@@ -25,11 +25,12 @@ from mnist_lipschitz.distance import (
     covariance_eigenbasis, truncated_precision, sweep_epsilon, sweep_k_condition_numbers,
 )
 from mnist_lipschitz.embeddings import elementwise_embedding, local_patch_cross_terms
-from mnist_lipschitz.smoothing import smoothed_cross_terms_embedding, gaussian_blur_embedding
+from mnist_lipschitz.smoothing import smoothed_cross_terms_embedding, gaussian_blur_embedding, RADIUS_MULTIPLIER
 from mnist_lipschitz.plots import (
     MODEL_ORDER, plot_embedding_degree_sweep, plot_ratio_distribution, plot_image_pairs,
     plot_smoothing_gallery, plot_smoothing_stability_sweep, plot_smoothing_ratio_sweep,
     plot_truncated_mahalanobis_stability_sweep, plot_truncated_mahalanobis_ratio_sweep,
+    plot_radius_multiplier_stability_sweep, plot_radius_multiplier_ratio_sweep,
 )
 
 torch.set_default_dtype(torch.float64)
@@ -658,6 +659,140 @@ def run_smoothing_sweep(
         print(f"\nSaved results to {RESULTS_DIR}")
 
     return {"sigma_results": sigma_results, "stability_figure": stability_fig, "ratio_figure": ratio_fig,
+            "lr_model": lr_model, "train": train, "test": test}
+
+
+# ---------------------------------------------------------------------------
+# radius_multiplier sweep (opt-in, not part of main()/run_mnist_experiment())
+# ---------------------------------------------------------------------------
+
+def run_radius_multiplier_sweep(
+    radius_multipliers=(2, 3, 4, 5, 6), sigma=1.0, lr_model=None, train=None, test=None,
+    epsilon_pool=None, epsilon_values=(1e-6, 1e-4, 1e-2, 1e-1, 1.0, 10.0, 100.0),
+    epsilon_pool_size=3000, n_subsamples=5, subsample_frac=0.8, stability_n_points=100,
+    max_cond=1e4, max_cv=0.05, n_ratio_points=300, k_neighbors=5, n_purity_points=1000,
+    seed=SEED, verbose=True,
+):
+    """`run_smoothing_sweep`'s sibling: instead of sweeping smoothing strength `sigma`, fixes
+    `sigma` at the already-established best value (`1.0`, `run_smoothing_sweep`'s sweet spot -- see
+    `README.md`'s smoothing sub-experiment) and sweeps `smoothing.py`'s `radius_multiplier` --
+    `RADIUS_MULTIPLIER=3` was used throughout that entire sweep without itself ever having been
+    swept, i.e. picked once and assumed, not checked. Same per-value methodology as
+    `run_smoothing_sweep`: `epsilon_stability_check` on the full standard epsilon grid, `purity` on
+    a fixed validation subset, an always-computed Euclidean ratio-distribution analysis, and a
+    Mahalanobis one gated on whether epsilon stability actually passed at that `radius_multiplier`.
+
+    **Saves incrementally, after every `radius_multiplier` completes**, not just once at the end --
+    unlike `run_smoothing_sweep`'s per-sigma gallery PNGs (which gave incidental progress
+    visibility), this sweep has no equivalent per-value artifact, so the summary JSON/arrays are
+    the only way to observe progress on a long-running background execution; writing them
+    incrementally makes that possible.
+
+    Returns a dict: `multiplier_results` (`{radius_multiplier: {min_cv, stability_pass,
+    selected_epsilon, knn_label_purity, euclidean_ratio_summary, mahalanobis_ratio_summary}}`),
+    `stability_figure`, `ratio_figure`, plus `lr_model`/`train`/`test` for reuse. Also saves a
+    summary JSON, the merged ratio-distribution arrays, and both summary plots to `results/`.
+
+    Deliberately **not** called from `main()` (mirrors `run_smoothing_sweep`'s own opt-in
+    convention) -- run it directly, e.g. from `notebook_radius_multiplier_sweep.ipynb`.
+    """
+    torch.manual_seed(seed)
+    if train is None:
+        train = load_mnist(train=True)
+    if test is None:
+        test = load_mnist(train=False)
+    if lr_model is None:
+        train_flat = make_loader(train.x_flat, train.y, batch_size=256, shuffle=True, seed=seed)
+        test_flat = make_loader(test.x_flat, test.y, batch_size=1000, shuffle=False)
+        lr_model, lr_train_acc, lr_test_acc = train_classifier(
+            LogisticRegressionModel(), train_flat, test_flat, epochs=15, lr=1e-3, verbose=verbose)
+        if verbose:
+            print(f"trained reference logistic-regression model: "
+                  f"train_acc={lr_train_acc:.4f}  test_acc={lr_test_acc:.4f}")
+    if epsilon_pool is None:
+        epsilon_pool = get_dev_subset(train, epsilon_pool_size, seed=seed)
+
+    val_idx = stratified_subset_idx(test.y, n_purity_points, seed=seed)
+    x_val, y_val = test.x_flat[val_idx], test.y[val_idx]
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+
+    multiplier_results = {}
+    ratio_arrays = {}
+    for m in radius_multipliers:
+        if verbose:
+            print(f"\n=== radius_multiplier={m} (sigma={sigma} fixed) ===")
+        embed_fn = lambda x, m=m: smoothed_cross_terms_embedding(x, sigma, radius_multiplier=m)
+
+        cond_numbers = sweep_epsilon(embed_fn(epsilon_pool.x_flat), list(epsilon_values))
+        stability_results = epsilon_stability_check(
+            lr_model, epsilon_pool, list(epsilon_values), n_subsamples=n_subsamples,
+            subsample_frac=subsample_frac, n_points=stability_n_points, seed=seed, verbose=verbose,
+            embed_fn=embed_fn)
+        cv_values = [stability_results[eps]["cv"] for eps in epsilon_values]
+        min_cv = min(cv_values)
+
+        candidates = [eps for eps, cond, cv in zip(epsilon_values, cond_numbers, cv_values)
+                      if cond <= max_cond and cv <= max_cv]
+        stability_pass = len(candidates) > 0
+        selected_epsilon = select_epsilon(list(epsilon_values), cond_numbers, cv_values,
+                                           max_cond=max_cond, max_cv=max_cv, verbose=verbose)
+        cond_at_selected = cond_numbers[list(epsilon_values).index(selected_epsilon)]
+
+        purity = _knn_label_purity(embed_fn(x_val), y_val, k=5)
+
+        euclidean_embedded_fn = lambda x, y, embed_fn=embed_fn: euclidean_distance_fn(embed_fn(x), embed_fn(y))
+        euclidean_ratio_result = run_ratio_distribution_analysis(
+            lr_model, "logistic_regression", f"radius_mult{m}_euclidean",
+            test.x_flat, test.y, euclidean_embedded_fn,
+            n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+        ratio_arrays.update(euclidean_ratio_result["arrays"])
+
+        mahalanobis_ratio_result = None
+        if stability_pass:
+            precision = svd_ridge_precision(embed_fn(train.x_flat), selected_epsilon)
+            mahalanobis_fn = make_mahalanobis_distance_fn(precision, embed_fn=embed_fn)
+            mahalanobis_ratio_result = run_ratio_distribution_analysis(
+                lr_model, "logistic_regression", f"radius_mult{m}_mahalanobis",
+                test.x_flat, test.y, mahalanobis_fn,
+                n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
+            ratio_arrays.update(mahalanobis_ratio_result["arrays"])
+        elif verbose:
+            print(f"  radius_multiplier={m}: epsilon stability did not pass (min cv={min_cv:.4f} > {max_cv}) "
+                  f"-- skipping Mahalanobis ratio-distribution")
+
+        multiplier_results[m] = {
+            "epsilon_values": list(epsilon_values), "cond_numbers": cond_numbers, "cv_values": cv_values,
+            "min_cv": min_cv, "stability_pass": stability_pass, "selected_epsilon": selected_epsilon,
+            "cond_number_at_selected_epsilon": cond_at_selected,
+            "knn_label_purity": purity,
+            "euclidean_ratio_summary": euclidean_ratio_result["summary"],
+            "mahalanobis_ratio_summary": mahalanobis_ratio_result["summary"] if mahalanobis_ratio_result else None,
+        }
+
+        # incremental save after every radius_multiplier -- the only progress visibility available
+        # for a long-running background execution of this sweep (see docstring)
+        with open(RESULTS_DIR / "radius_multiplier_sweep_results.json", "w") as f:
+            json.dump({str(k): v for k, v in multiplier_results.items()}, f, indent=2)
+        np.savez(RESULTS_DIR / "radius_multiplier_sweep_arrays.npz", **ratio_arrays)
+
+    stability_rows = [{"radius_multiplier": m, "min_cv": r["min_cv"]} for m, r in multiplier_results.items()]
+    stability_fig = plot_radius_multiplier_stability_sweep(
+        stability_rows, max_cv=max_cv, save_path=RESULTS_DIR / "radius_multiplier_stability_sweep.png")
+
+    ratio_rows = [{
+        "radius_multiplier": m,
+        "knn_label_purity": r["knn_label_purity"],
+        "euclidean_near_over_all": r["euclidean_ratio_summary"]["near_neighbor_mean"] / r["euclidean_ratio_summary"]["all_pairs_mean"],
+        "mahalanobis_near_over_all": (r["mahalanobis_ratio_summary"]["near_neighbor_mean"] / r["mahalanobis_ratio_summary"]["all_pairs_mean"])
+                                      if r["mahalanobis_ratio_summary"] else None,
+    } for m, r in multiplier_results.items()]
+    ratio_fig = plot_radius_multiplier_ratio_sweep(ratio_rows, save_path=RESULTS_DIR / "radius_multiplier_ratio_sweep.png")
+
+    if verbose:
+        print(f"\nSaved results to {RESULTS_DIR}")
+
+    return {"multiplier_results": multiplier_results, "stability_figure": stability_fig, "ratio_figure": ratio_fig,
             "lr_model": lr_model, "train": train, "test": test}
 
 

@@ -755,3 +755,71 @@ def plot_truncated_mahalanobis_ratio_sweep(feature_space_results, save_path=None
     fig.tight_layout()
     _maybe_save(fig, save_path)
     return fig
+
+
+def plot_radius_multiplier_stability_sweep(sweep_rows, max_cv=0.05, save_path=None):
+    """Epsilon-selection stability (best/minimum coefficient of variation across the standard
+    epsilon sweep) vs. `radius_multiplier`, at the fixed, already-established best `sigma=1`, for
+    `notebook_radius_multiplier_sweep.ipynb` -- tests whether `smoothing.py`'s hardcoded
+    `radius_multiplier=3` (the kernel's `radius = round(radius_multiplier*sigma)` cutoff, never
+    itself swept before) was actually the best choice, same layout as
+    `plot_smoothing_stability_sweep`.
+
+    `sweep_rows`: list of dicts, each with `radius_multiplier` and `min_cv` keys.
+    """
+    multipliers = [r["radius_multiplier"] for r in sweep_rows]
+    min_cvs = [r["min_cv"] for r in sweep_rows]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(multipliers, min_cvs, marker="o", color="tab:blue")
+    ax.axhline(max_cv, color="gray", linestyle="--", label=f"stability bound (cv<={max_cv})")
+    ax.set_xlabel("radius_multiplier (kernel radius = round(radius_multiplier * sigma))")
+    ax.set_ylabel("best (minimum) coefficient of variation across epsilon candidates")
+    ax.set_title("Epsilon-selection stability vs. radius_multiplier (sigma=1 fixed)")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig
+
+
+def plot_radius_multiplier_ratio_sweep(sweep_rows, save_path=None):
+    """Validation quality (`knn_label_purity`, left) and the ratio-distribution near/all elevation
+    (right, Euclidean always, Mahalanobis only where epsilon selection passed the stability bound)
+    vs. `radius_multiplier`, at the fixed best `sigma=1`. Same two-panel layout as
+    `plot_smoothing_ratio_sweep`.
+
+    `sweep_rows`: list of dicts, each with `radius_multiplier`, `knn_label_purity`,
+    `euclidean_near_over_all`, and `mahalanobis_near_over_all` (the last `None` where Mahalanobis
+    wasn't computed -- skipped, not plotted as 0).
+    """
+    multipliers = [r["radius_multiplier"] for r in sweep_rows]
+    purities = [r["knn_label_purity"] for r in sweep_rows]
+    euclidean_near_over_all = [r["euclidean_near_over_all"] for r in sweep_rows]
+    mahalanobis_multipliers = [r["radius_multiplier"] for r in sweep_rows if r["mahalanobis_near_over_all"] is not None]
+    mahalanobis_near_over_all = [r["mahalanobis_near_over_all"] for r in sweep_rows
+                                  if r["mahalanobis_near_over_all"] is not None]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(multipliers, purities, marker="o", color="tab:blue")
+    ax1.axhline(0.10, color="gray", linestyle=":", label="10-class chance baseline")
+    ax1.set_xlabel("radius_multiplier")
+    ax1.set_ylabel("knn_label_purity (k=5)")
+    ax1.set_title("Validation quality vs. radius_multiplier")
+    ax1.legend(fontsize=8)
+
+    ax2.plot(multipliers, euclidean_near_over_all, marker="s", color="tab:orange",
+              label="smoothed cross-terms + Euclidean")
+    if mahalanobis_multipliers:
+        ax2.plot(mahalanobis_multipliers, mahalanobis_near_over_all, marker="^", color="tab:green",
+                  label="smoothed cross-terms + Mahalanobis")
+    ax2.axhline(1.13, color="gray", linestyle="--", label="raw-pixel Euclidean near/all (README)")
+    ax2.set_xlabel("radius_multiplier")
+    ax2.set_ylabel("near-neighbor mean / all-pairs mean")
+    ax2.set_title("Ratio-distribution near/all elevation vs. radius_multiplier")
+    ax2.legend(fontsize=8)
+
+    fig.suptitle("radius_multiplier sweep (sigma=1 fixed): was the hardcoded default of 3 actually best?")
+    fig.tight_layout()
+    _maybe_save(fig, save_path)
+    return fig

@@ -389,6 +389,14 @@ at all three degrees). Raising the embedding degree changes the ratio's overall 
 changing *which* pairs (visually-similar vs. general population) are more or less sensitive
 relative to each other.
 
+> **⚠️ This negative result predates a numerical bug fix and is being re-verified** — see the
+> `radius_multiplier` sub-experiment later in this README for the discovery. The "mean
+> gradient-norm estimates in the billions to trillions" noted below is itself consistent with the
+> bug (`torch.linalg.solve`/`inv` producing numerically meaningless output on severely
+> ill-conditioned precision matrices, later fixed to `torch.linalg.pinv`) rather than a genuine
+> property of this embedding's Lipschitz sensitivity. A re-run under the fix is in progress; check
+> back here for corrected numbers.
+
 **A structurally different embedding: local spatial cross-terms (negative result).**
 `embeddings.py::local_patch_cross_terms(x_image)` was built as a second, deliberately different
 embedding to compare against `elementwise_embedding`: instead of same-pixel powers, it maps each
@@ -555,6 +563,18 @@ for Nick/Terry, not decided here.
 
 ## Sub-experiment: smoothing before `local_patch_cross_terms` (verdict: helps a lot, but never actually fixes it)
 
+> **⚠️ Numbers in this section (and the `local_patch_cross_terms` negative result above it) predate
+> a real numerical bug fix and are being re-verified.** `smoothing.py`'s `radius_multiplier` sweep
+> (below) discovered that `gradient_norm_estimate`'s embed_fn pullback path used
+> `torch.linalg.solve`/`torch.linalg.inv`, which produces numerically meaningless output (directly
+> verified: a mean gradient-norm estimate of ~11.4 million on one real subsample, vs. a
+> pinv-corrected ~45 thousand, on a `Q(x)` matrix with condition number ~1e18-1e21) on the severely
+> ill-conditioned precision matrices this embedding produces. That path was fixed
+> (`torch.linalg.pinv`, `estimators.py`) for an unrelated reason (`distance.py::truncated_precision`
+> needing pseudoinverse-tolerant handling), *after* every number below was computed. A full re-run
+> under the corrected code is in progress -- see the `radius_multiplier` sub-experiment below for
+> the discovery, and check back here for corrected numbers once the re-run completes.
+
 `smoothing.py`/`notebook_smoothing.ipynb` follows up directly on the `local_patch_cross_terms`
 negative result above (epsilon selection fails categorically, cv 0.91-1.45 against a `cv<=0.05`
 bound at every epsilon tried). The working hypothesis there was that MNIST's mostly-black
@@ -633,6 +653,52 @@ sweep result above, this closes out the smoothing follow-up: smoothing measurabl
 Mahalanobis instability without fixing it, and the Euclidean side-channel it does support isn't
 carrying new signal. See `notebook_smoothing.ipynb`'s "Overall verdict" section for the full
 numeric decomposition and both galleries.
+
+## Sub-experiment: `radius_multiplier` sweep (verdict: `5` is best, but a numerical bug is the real finding)
+
+`smoothing.py::gaussian_blur_embedding` builds its own Gaussian kernel directly (never calling any
+external library's blur function — see `_gaussian_kernel_1d`'s docstring), with
+`radius = round(radius_multiplier * sigma)`. The entire smoothing sweep above used
+`radius_multiplier=3` throughout without that value itself ever having been swept — picked once (a
+common rule of thumb covering ~99.7% of a Gaussian's mass) and never checked against alternatives
+on this project's own data. `notebook_radius_multiplier_sweep.ipynb` sweeps `radius_multiplier` in
+`{2, 3, 4, 5, 6}` at the fixed, already-established best `sigma=1`, using the same
+`epsilon_stability_check` + ratio-distribution methodology as the sweep above:
+
+| radius_multiplier | min_cv | stability_pass | purity | euclidean near/all | mahalanobis near/all |
+|---|---|---|---|---|---|
+| 2 | 0.0237 | True | 0.8140 | 1.1856 | 0.9148 |
+| 3 (old default) | 0.0233 | True | 0.8146 | 1.1888 | 0.8508 |
+| 4 | 0.0128 | True | 0.8148 | 1.1889 | 0.8508 |
+| **5 (new default)** | **0.0110** | **True** | **0.8148** | **1.1889** | **0.8508** |
+| 6 | 0.0118 | True | 0.8148 | 1.1889 | 0.8508 |
+
+`radius_multiplier=5` gives the best stability margin, though `4`/`6` are close and all three
+converge to essentially identical purity/ratio numbers (identical to 4 decimal places for
+`mahalanobis near/all` across 4-6) — `5`'s edge is about stability, not additional signal. `2` also
+passes but with roughly double the cv and a weaker Mahalanobis reversal, consistent with too narrow
+a kernel not fully capturing the Gaussian's tail. Set as `smoothing.py::RADIUS_MULTIPLIER`.
+
+**The headline result isn't the tuning win — it's a numerical bug this sweep surfaced.** Every one
+of the five `radius_multiplier` values passes the `cv<=0.05` stability bound. But `sigma=1`/
+`radius_multiplier=3` was already measured once before, in the smoothing sweep above, at cv=0.0754
+— **failing**. Same configuration, same seed, same model (`knn_label_purity` matched exactly,
+0.8146 both times) — yet a 3x-different stability result. Traced directly, not just inferred: the
+discrepancy is `estimators.py::gradient_norm_estimate`'s embed_fn pullback path, which used
+`torch.linalg.solve`/`torch.linalg.inv` until the truncated-eigenvalue Mahalanobis work (below)
+fixed it to `torch.linalg.pinv` for an unrelated reason. Reproducing the exact computation by hand:
+`Q(x)`'s condition number reaches **~1e18-1e21** (`torch.linalg.svd` itself fails to converge on the
+raw precision matrix at this ill-conditioning) — and the old `solve`-based dual norm, evaluated on
+this exact matrix, gave a mean gradient-norm estimate of **~11.4 million**, with individual points
+differing from the corrected value by up to a factor of **~9e13**. That is numerically meaningless
+noise, not signal, and it was feeding directly into every epsilon-selection cv computed for this
+embedding throughout this project's history.
+
+**This means the smoothing sweep's and `local_patch_cross_terms`'s "categorical epsilon-selection
+failure" conclusions (both documented above) were measured under this same buggy numerics and are
+being re-verified under the fix** — see this section's warning banner above for status; this
+`radius_multiplier` sweep's own numbers don't need re-running, since they were already computed
+with the corrected code.
 
 ## Sub-experiment: truncated-eigenvalue Mahalanobis (verdict: fixes it for raw pixels and narrowly for `local_patch_cross_terms`, not for the smoothed variant)
 

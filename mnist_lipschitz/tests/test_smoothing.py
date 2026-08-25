@@ -5,7 +5,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mnist_lipschitz.smoothing import gaussian_blur_embedding, smoothed_cross_terms_embedding
+from mnist_lipschitz.smoothing import (
+    gaussian_blur_embedding, smoothed_cross_terms_embedding, _gaussian_kernel_1d, RADIUS_MULTIPLIER,
+)
 from mnist_lipschitz.embeddings import local_patch_cross_terms
 
 
@@ -116,3 +118,59 @@ def test_composition_single_example_matches_batch_leading_dim_flexibility():
     for i in range(4):
         single = smoothed_cross_terms_embedding(x_flat[i], sigma=1.0)
         assert torch.allclose(single, batched[i], atol=1e-10)
+
+
+def test_default_radius_multiplier_matches_constant():
+    torch.manual_seed(6)
+    x = torch.rand(5, 784)
+    default = gaussian_blur_embedding(x, sigma=1.0)
+    explicit = gaussian_blur_embedding(x, sigma=1.0, radius_multiplier=RADIUS_MULTIPLIER)
+    assert torch.equal(default, explicit)
+
+
+def test_larger_radius_multiplier_gives_wider_kernel():
+    sigma = 1.0
+    sizes = [_gaussian_kernel_1d(sigma, radius_multiplier=m).shape[0] for m in (2, 3, 4, 5, 6)]
+    assert sizes == sorted(sizes)
+    assert sizes[0] < sizes[-1]
+
+
+def test_larger_radius_multiplier_converges_toward_the_continuous_gaussian():
+    """Each kernel is renormalized to sum to 1 regardless of radius_multiplier, so the
+    distinguishing effect isn't total mass -- it's how much of the *true* (infinite-support)
+    Gaussian's tail gets included before that renormalization. A larger radius_multiplier includes
+    more of the tail, so it should approximate the continuous Gaussian more closely: the kernel
+    should change less between radius_multiplier=5 and 6 than between 2 and 3, since 5/6 have
+    already captured nearly all the real mass (>99.99% within 5 sigma) while 2/3 are still cutting
+    off a non-negligible amount."""
+    sigma = 1.0
+    k2 = _gaussian_kernel_1d(sigma, radius_multiplier=2)
+    k3 = _gaussian_kernel_1d(sigma, radius_multiplier=3)
+    k5 = _gaussian_kernel_1d(sigma, radius_multiplier=5)
+    k6 = _gaussian_kernel_1d(sigma, radius_multiplier=6)
+
+    # compare only the overlapping center region (smaller kernels are a strict sub-length)
+    def center_diff(k_small, k_large):
+        pad = (k_large.shape[0] - k_small.shape[0]) // 2
+        return (k_large[pad:pad + k_small.shape[0]] - k_small).abs().sum().item()
+
+    diff_2_3 = center_diff(k2, k3)
+    diff_5_6 = center_diff(k5, k6)
+    assert diff_5_6 < diff_2_3
+
+
+def test_radius_multiplier_composes_through_smoothed_cross_terms_embedding():
+    """radius_multiplier=1 (a visibly narrower kernel than any default this project is likely to
+    pick) is deliberately used as the "different" contrast value here, not a value close to
+    RADIUS_MULTIPLIER -- large multipliers converge toward the same continuous-Gaussian
+    approximation (see test_larger_radius_multiplier_converges_toward_the_continuous_gaussian and
+    the radius_multiplier sweep's own finding that 4/5/6 give near-identical downstream numbers),
+    so a contrast value near the current default could coincidentally fall within torch.allclose's
+    tolerance regardless of which specific default this project settles on."""
+    torch.manual_seed(7)
+    x_flat = torch.rand(3, 784)
+    default = smoothed_cross_terms_embedding(x_flat, sigma=1.0)
+    explicit = smoothed_cross_terms_embedding(x_flat, sigma=1.0, radius_multiplier=RADIUS_MULTIPLIER)
+    different = smoothed_cross_terms_embedding(x_flat, sigma=1.0, radius_multiplier=1)
+    assert torch.equal(default, explicit)
+    assert not torch.allclose(default, different)
