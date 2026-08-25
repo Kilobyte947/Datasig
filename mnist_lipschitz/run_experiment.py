@@ -663,6 +663,100 @@ def run_smoothing_sweep(
 
 
 # ---------------------------------------------------------------------------
+# Class-separation check (opt-in, not part of main()/run_mnist_experiment())
+# ---------------------------------------------------------------------------
+
+def class_separation_ratio(x_subset, y_subset, distance_fn):
+    """Mean between-class / mean within-class distance under `distance_fn`, using true labels --
+    a metric-quality check independent of any model's margin behavior: does this distance metric
+    intrinsically place different digits farther apart than same-digit pairs, or not? Higher is
+    better separation. Uses all `N*(N-1)/2` pairs (`torch.triu_indices`, matching
+    `estimators.py::pairwise_lipschitz_all`'s all-pairs convention), not just near-neighbors.
+
+    This answers a different question than `run_ratio_distribution_analysis`'s near/all ratio:
+    that ratio is about whether a *model's* margin sensitivity is elevated on near-neighbor pairs
+    (a statement about the model, using the metric only to pick pairs); this is a statement about
+    the metric itself, using only ground-truth class labels, with no model or margin involved at
+    all.
+
+    `x_subset`: (N, 784) raw pixel vectors -- `distance_fn` is called directly on raw x/y and is
+    expected to handle any embedding internally (matching `run_ratio_distribution_analysis`'s
+    `distance_fn` convention, e.g. `make_mahalanobis_distance_fn(precision, embed_fn=embed_fn)`),
+    not pre-embedded input. `y_subset`: (N,) true integer labels, same order.
+    """
+    N = x_subset.shape[0]
+    ii, jj = torch.triu_indices(N, N, offset=1)
+    dists = distance_fn(x_subset[ii], x_subset[jj])
+    same_class = y_subset[ii] == y_subset[jj]
+
+    within_mean = dists[same_class].mean().item()
+    between_mean = dists[~same_class].mean().item()
+    return {
+        "within_mean": within_mean, "between_mean": between_mean,
+        "ratio": between_mean / within_mean,
+        "n_within": int(same_class.sum().item()), "n_between": int((~same_class).sum().item()),
+    }
+
+
+def run_class_separation_check(train=None, test=None, n_points=300, seed=SEED, verbose=True):
+    """Runs `class_separation_ratio` against a fixed set of 4 distance metrics, all evaluated on
+    the same stratified subsample of `test`: plain Euclidean on raw pixels; `local_patch_cross_terms`
+    + Euclidean, unsmoothed (`sigma=0`); `smoothed_cross_terms_embedding` + Euclidean at `sigma=1`
+    (the established sweet spot, `README.md`'s smoothing sub-experiment); and the same `sigma=1`
+    embedding + Mahalanobis -- **only meaningful since the `torch.linalg.pinv` fix and
+    `RADIUS_MULTIPLIER=5` default change**, since this Mahalanobis metric categorically failed
+    epsilon-selection stability under the pre-fix numerics and had no valid precision matrix to use
+    at all before that.
+
+    The Mahalanobis precision matrix is fit on the full training set at `epsilon=0.01` -- the
+    epsilon actually selected for `sigma=1` in the corrected smoothing sweep
+    (`results/smoothing_sweep_results.json`) -- reused directly rather than re-running
+    `epsilon_stability_check` here, matching this project's established "reuse an already-selected
+    epsilon, don't reselect" convention (e.g. `run_stronger_cnn_raw_mnist_experiment`).
+
+    `n_points` defaults to 300, matching this project's established memory-safety convention for
+    `local_patch_cross_terms`-family embeddings (see `run_smoothing_sweep`'s own docstring) --
+    unlike that sweep's expensive `epsilon_stability_check` calls, this check only ever does plain
+    forward passes through each embedding (no `jacrev`/gradient computation at all), so it's cheap
+    regardless of point count, but 300 is kept for direct comparability with every other
+    `local_patch_cross_terms`-family result in this project.
+
+    Returns a dict: `results` (`{metric_name: {within_mean, between_mean, ratio, n_within,
+    n_between}}`), plus `x_subset`/`y_subset`/`train`/`test` for reuse by a caller.
+    """
+    if train is None:
+        train = load_mnist(train=True)
+    if test is None:
+        test = load_mnist(train=False)
+
+    subset_idx = stratified_subset_idx(test.y, n_points, seed=seed)
+    x_subset, y_subset = test.x_flat[subset_idx], test.y[subset_idx]
+
+    embed_fn_unsmoothed = lambda x: local_patch_cross_terms(x.reshape(*x.shape[:-1], 28, 28))
+    embed_fn_sigma1 = lambda x: smoothed_cross_terms_embedding(x, 1.0)
+
+    mahalanobis_epsilon = 0.01  # sigma=1's selected epsilon, corrected smoothing sweep -- see docstring
+    precision = svd_ridge_precision(embed_fn_sigma1(train.x_flat), mahalanobis_epsilon)
+
+    metrics = {
+        "euclidean_raw_pixels": euclidean_distance_fn,
+        "cross_terms_unsmoothed_euclidean": lambda x, y: euclidean_distance_fn(embed_fn_unsmoothed(x), embed_fn_unsmoothed(y)),
+        "cross_terms_sigma1_euclidean": lambda x, y: euclidean_distance_fn(embed_fn_sigma1(x), embed_fn_sigma1(y)),
+        "cross_terms_sigma1_mahalanobis": make_mahalanobis_distance_fn(precision, embed_fn=embed_fn_sigma1),
+    }
+
+    results = {}
+    for name, distance_fn in metrics.items():
+        r = class_separation_ratio(x_subset, y_subset, distance_fn)
+        results[name] = r
+        if verbose:
+            print(f"  {name}: within={r['within_mean']:.4f}  between={r['between_mean']:.4f}  ratio={r['ratio']:.4f}")
+
+    return {"results": results, "x_subset": x_subset, "y_subset": y_subset, "subset_idx": subset_idx,
+            "train": train, "test": test}
+
+
+# ---------------------------------------------------------------------------
 # radius_multiplier sweep (opt-in, not part of main()/run_mnist_experiment())
 # ---------------------------------------------------------------------------
 

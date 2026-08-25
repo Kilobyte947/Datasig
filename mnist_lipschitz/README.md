@@ -389,13 +389,16 @@ at all three degrees). Raising the embedding degree changes the ratio's overall 
 changing *which* pairs (visually-similar vs. general population) are more or less sensitive
 relative to each other.
 
-> **⚠️ This negative result predates a numerical bug fix and is being re-verified** — see the
-> `radius_multiplier` sub-experiment later in this README for the discovery. The "mean
-> gradient-norm estimates in the billions to trillions" noted below is itself consistent with the
-> bug (`torch.linalg.solve`/`inv` producing numerically meaningless output on severely
-> ill-conditioned precision matrices, later fixed to `torch.linalg.pinv`) rather than a genuine
-> property of this embedding's Lipschitz sensitivity. A re-run under the fix is in progress; check
-> back here for corrected numbers.
+> **✅ Re-verified after a numerical bug fix — this negative result holds.** The `radius_multiplier`
+> sub-experiment later in this README discovered that `gradient_norm_estimate`'s embed_fn pullback
+> path used `torch.linalg.solve`/`inv`, numerically meaningless on this embedding's severely
+> ill-conditioned precision matrices (`Q(x)` condition numbers ~1e18-1e21). Fixed to
+> `torch.linalg.pinv`, this exact unsmoothed check was re-run: cv is still categorically over the
+> `0.05` bound (now 0.7347, actually slightly *worse* than the originally-recorded 0.6396) — the
+> "mean gradient-norm estimates in the billions to trillions" below were numerically garbage, but
+> the *conclusion* (this embedding, unsmoothed, cannot pass epsilon selection at any regularization
+> level) is genuine, not a bug artifact. See the smoothing sub-experiment below for what *did*
+> change under the fix.
 
 **A structurally different embedding: local spatial cross-terms (negative result).**
 `embeddings.py::local_patch_cross_terms(x_image)` was built as a second, deliberately different
@@ -561,19 +564,16 @@ image evidence. Separately: this sub-experiment uses **unsupervised** UMAP only 
 supervised UMAP (using class labels during fitting) was the intended variant is an open question
 for Nick/Terry, not decided here.
 
-## Sub-experiment: smoothing before `local_patch_cross_terms` (verdict: helps a lot, but never actually fixes it)
+## Sub-experiment: smoothing before `local_patch_cross_terms` (verdict: fixes it completely for any sigma>=0.5)
 
-> **⚠️ Numbers in this section (and the `local_patch_cross_terms` negative result above it) predate
-> a real numerical bug fix and are being re-verified.** `smoothing.py`'s `radius_multiplier` sweep
-> (below) discovered that `gradient_norm_estimate`'s embed_fn pullback path used
-> `torch.linalg.solve`/`torch.linalg.inv`, which produces numerically meaningless output (directly
-> verified: a mean gradient-norm estimate of ~11.4 million on one real subsample, vs. a
-> pinv-corrected ~45 thousand, on a `Q(x)` matrix with condition number ~1e18-1e21) on the severely
-> ill-conditioned precision matrices this embedding produces. That path was fixed
-> (`torch.linalg.pinv`, `estimators.py`) for an unrelated reason (`distance.py::truncated_precision`
-> needing pseudoinverse-tolerant handling), *after* every number below was computed. A full re-run
-> under the corrected code is in progress -- see the `radius_multiplier` sub-experiment below for
-> the discovery, and check back here for corrected numbers once the re-run completes.
+> **✅ Corrected and re-run.** The numbers originally reported in this section were computed with a
+> buggy `gradient_norm_estimate` (`torch.linalg.solve`/`torch.linalg.inv`, numerically meaningless
+> on this embedding's severely ill-conditioned precision matrices — `Q(x)` condition numbers reach
+> ~1e18-1e21, directly verified). Fixed to `torch.linalg.pinv` (`distance.py::truncated_precision`
+> needed pseudoinverse-tolerant handling; see the `radius_multiplier` sub-experiment below for the
+> discovery), and `RADIUS_MULTIPLIER`'s default also changed from `3` to `5` in the same commit —
+> this section's numbers are from a full re-run under both fixes. **The original conclusion
+> ("smoothing helps a lot but never actually fixes it") was wrong** — corrected below.
 
 `smoothing.py`/`notebook_smoothing.ipynb` follows up directly on the `local_patch_cross_terms`
 negative result above (epsilon selection fails categorically, cv 0.91-1.45 against a `cv<=0.05`
@@ -588,40 +588,43 @@ to spread stroke intensity into more non-zero pixels *before* cross-terms are co
 `sigma` in `{0, 0.5, 1, 1.5, 2, 3}` — `sigma=0` reproduces the unblurred baseline as this sweep's
 own row, not a fresh comparison.
 
-**Smoothing helps substantially but never actually crosses the stability bound.** The best-fit
-coefficient of variation drops **~8.5x** from the unblurred baseline (0.6396) to its minimum at
-`sigma=1` (0.0754), stays roughly flat through `sigma=1.5` (0.0758), then climbs again at `sigma=2`
-(0.1149) and `sigma=3` (0.1241) — a real, reproducible U-shape, not noise. But even at its best
-point the cv is still ~50% above the `cv<=0.05` bound, so `stability_pass=False` at every single
-sigma tested, and (per this sweep's design — see `run_experiment.py::run_smoothing_sweep`'s
-docstring) no Mahalanobis ratio-distribution numbers were ever computed, at any sigma: there was
-never a stable epsilon to build a precision matrix from.
+**Smoothing fixes the instability completely — for any sigma greater than 0.** Under the corrected
+numerics: `sigma=0` (no smoothing) still fails, and fails *worse* than before (cv=0.7347 vs. the
+old, also-buggy 0.6396) — genuine confirmation that the fully unsmoothed embedding is intrinsically
+unstable, not a bug artifact. But **every sigma from `0.5` through `3` now passes the `cv<=0.05`
+bound cleanly**: 0.5 → 0.0264, 1 → 0.0110 (the best), 1.5 → 0.0183, 2 → 0.0067 (also very good),
+3 → 0.0132. For the first time, this embedding has real, passing Mahalanobis ratio-distribution
+results:
 
-**The near-best region (sigma~1-1.5) is not a case of "stability only kicks in after digits are
-already illegible."** Visual inspection of the sample-digit galleries at `sigma=1`/`1.5` shows
-every digit still immediately readable — softened strokes, but the topological features that
-distinguish digits (the 0's hole, the 3's two lobes, the 9's loop-and-tail) are fully intact.
-`knn_label_purity` backs this up quantitatively: it *peaks* in the same region (0.8146 at
-`sigma=1`, 0.8158 at `sigma=1.5`, both above the unblurred baseline's 0.7732), not degraded at all.
-Visible degradation only shows up later, at `sigma=3` (purity drops to 0.7154, and the gallery
-shows real structural loss — the 0's hole nearly filled in, the 3 collapsed toward a blob) — well
-past the stability sweet spot, not overlapping with it.
+| sigma | min_cv | selected_epsilon | mahalanobis near/all |
+|---|---|---|---|
+| 0.5 | 0.0264 | 1 | 0.898 |
+| 1 | 0.0110 | 0.01 | 0.851 |
+| 1.5 | 0.0183 | 0.01 | 0.932 |
+| 2 | 0.0067 | 0.01 | 1.005 |
+| 3 | 0.0132 | 0.01 | 1.105 |
 
-**Bottom line**: the hypothesis that smoothing would fix `local_patch_cross_terms`'s instability is
-**partially supported, not confirmed**. There is a genuine, visually-clean sweet spot around
-`sigma=1-1.5` where instability is far less severe and digits remain fully distinguishable — but
-it still isn't stable enough to trust a Mahalanobis fit built on it, so this embedding+distance
-combination remains unusable within the tested range, same overall status as before this
-follow-up, just with a clearer picture of *how close* smoothing gets and *where* the sweet spot is
-(useful groundwork if anyone tries a finer sigma grid or a larger epsilon-selection pool later, per
-the notebook's closing note). See `notebook_smoothing.ipynb` for the full per-sigma table, plots,
-and galleries.
+The Mahalanobis near/all ratio shows a clean, monotonically increasing trend: most reversed
+(below 1, the same low-variance-direction-amplification pattern `mahalanobis_flip_mechanism.md`
+established for raw pixels) at `sigma=1`, converging back toward the Euclidean-family "elevated"
+pattern as `sigma` grows, crossing 1.0 around `sigma=2`. This trend simply didn't exist to observe
+before the fix — there was no passing sigma at all.
+
+**Digit legibility across the passing range**: the galleries (unaffected by this fix — they never
+touched Mahalanobis/precision matrices) still show `sigma=1`/`1.5` fully legible and `sigma=3`
+visibly degraded (0's hole nearly filled, 3 collapsed toward a blob), exactly as originally
+documented. `knn_label_purity` peaks at `sigma=1`/`1.5` (0.8148/0.8160) and drops at `sigma=3`
+(0.7154). Since the *entire* practical range (0.5-3) now passes stability, the earlier
+"near-miss, sweet spot never quite passing" framing no longer applies — the only real
+recommendation left is to prefer `sigma` in roughly `1`-`2` for the best combination of stability,
+purity, and visual legibility, not because larger sigma fails, but because it starts trading away
+legibility for no further stability benefit.
 
 **Follow-up: is the smoothed-cross-terms + Euclidean near/all elevation (1.19 at `sigma=1`, 1.27 at
 `sigma=1.5`) a real signal, or another compression artifact?** Checked the same way as the UMAP
-sub-experiment below — numerator/denominator decomposition plus a visual gallery — since Mahalanobis
-never reached stability at any sigma, this Euclidean side-channel was the only thing left worth
-scrutinizing before drawing any conclusion from it.
+sub-experiment below — numerator/denominator decomposition plus a visual gallery. (This Euclidean
+side-channel investigation predates the pinv fix but is unaffected by it — `euclidean_distance_fn`
+never touches a precision matrix — so its findings stand unchanged.)
 
 **Not a real signal — the numerator isn't elevated.** `margin_diff` is **29.8% *smaller*** for
 near-neighbor pairs than the general population, confirmed identical to raw-pixel-Euclidean on the
@@ -649,10 +652,48 @@ caveat already documented for this project's LR near-neighbor gallery check earl
 **Verdict**: this metric mildly amplifies an already-known, already-weak raw-pixel locality effect,
 concentrated on a handful of already-hard images the model gets wrong — not a genuine new
 margin-sensitivity finding, and not a UMAP-style distortion artifact either. Combined with the
-sweep result above, this closes out the smoothing follow-up: smoothing measurably helps the
-Mahalanobis instability without fixing it, and the Euclidean side-channel it does support isn't
-carrying new signal. See `notebook_smoothing.ipynb`'s "Overall verdict" section for the full
-numeric decomposition and both galleries.
+sweep result above, this closes out the smoothing follow-up: smoothing fully resolves the
+Mahalanobis instability (for any `sigma>=0.5`), and the Euclidean side-channel it also supports
+isn't carrying new signal beyond that. See `notebook_smoothing.ipynb`'s "Overall verdict" section
+for the full numeric decomposition and both galleries.
+
+### Follow-up: within/between-class separation (a different question from the near/all ratio)
+
+Everything above asks whether a *model's* margin sensitivity is elevated on near-neighbor pairs —
+a question about the model, using the distance metric only to decide which pairs count as
+"near-neighbor." This check asks a different question, with no model or margin involved: **using
+only true digit labels, does a given metric intrinsically place different digits farther apart
+than same-digit pairs?** Computed as `mean(between-class distance) / mean(within-class distance)`
+on a stratified 300-point subsample (`run_experiment.py::class_separation_ratio`/
+`run_class_separation_check`) — higher means better class separation. Checked for the 4 metrics
+that matter most given everything above: plain Euclidean on raw pixels; `local_patch_cross_terms` +
+Euclidean, unsmoothed; `smoothed_cross_terms_embedding` + Euclidean at `sigma=1`; and the same
+`sigma=1` embedding + Mahalanobis (only a valid, passing metric at all since the pinv fix +
+`RADIUS_MULTIPLIER=5` change).
+
+| rank | metric | within-class mean | between-class mean | between/within ratio |
+|---|---|---|---|---|
+| 1 | smoothed cross-terms (sigma=1) + Euclidean | 10.9737 | 13.2838 | **1.2105** |
+| 2 | plain Euclidean (raw pixels) | 8.8926 | 10.3919 | 1.1686 |
+| 3 | unsmoothed cross-terms + Euclidean | 17.9966 | 20.5782 | 1.1434 |
+| 4 | smoothed cross-terms (sigma=1) + Mahalanobis | 18.1509 | 18.7107 | 1.0308 |
+
+(See `notebook_smoothing.ipynb`'s class-separation section for the underlying within/between mean
+distances per metric.)
+
+**Smoothed cross-terms + Euclidean is the best class-separator of the four; Mahalanobis is the
+worst** — despite being the metric that took by far the most work (ridge-regularization tuning,
+the truncated-eigenvalue alternative, the whole numerical-bug saga) to get working at all here.
+This is consistent with `mahalanobis_flip_mechanism.md`'s mechanism: Mahalanobis distance amplifies
+low-variance pixel directions and downweights high-variance ones, but the directions that best
+separate *different digit classes* are disproportionately the high-variance ones (stroke
+position/shape), so downweighting them costs Mahalanobis some of its ability to tell classes apart
+— the same mechanism that makes it interesting for the near/all reversal above makes it a weaker
+class-separator here. **Practical takeaway**: smoothing before computing cross-terms, even under
+plain Euclidean distance, is a straightforward improvement over both raw pixels and unsmoothed
+cross-terms for pure class separation — no Mahalanobis machinery required. Mahalanobis's value in
+this project was never about being a better class-separator; it's specifically the near/all
+reversal pattern on near-neighbor pairs, a different and unrelated property from this measure.
 
 ## Sub-experiment: `radius_multiplier` sweep (verdict: `5` is best, but a numerical bug is the real finding)
 
