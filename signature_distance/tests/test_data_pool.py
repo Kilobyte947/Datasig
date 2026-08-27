@@ -4,9 +4,10 @@ import torch
 
 from signature_distance.data_pool import load_eval_pool
 
-# Reuse the MNIST files already downloaded for mnist_lipschitz so tests don't
-# need network access.
-DATA_ROOT = Path(__file__).resolve().parents[2] / "mnist_lipschitz" / "data"
+# Own local cache (self-contained within signature_distance, no dependency on
+# any other experiment's data directory) so tests don't need network access
+# after the first run.
+DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 
 
 def test_shapes_and_dtypes():

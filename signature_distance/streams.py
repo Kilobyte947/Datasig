@@ -1,16 +1,23 @@
 """Stream (path) construction from MNIST images, for later signature computation.
 
-Two independent methods for turning a 28x28 image into a path:
-  - Method 1 (`make_pixel_order` + `patch_sv_stream`): a time-augmented stream
+Two independent methods for turning a 28x28 image into a path (see PLAN.md /
+Method_B.md for the full design rationale):
+  - Method A (`make_pixel_order` + `patch_sv_stream`): a time-augmented stream
     of the largest singular value of 3x3 patches, visited in a fixed shared
     pixel order.
-  - Method 2 (`row_stream`, added in Checkpoint 3): the image's rows (or
-    columns) treated directly as a stream in R^28.
+  - Method B (`make_reference_lines` + `line_stream`): a set of fixed
+    horizontal/vertical reference lines through the image, each sampled into
+    a time-augmented [t, intensity] stream via bilinear interpolation.
+
+`row_stream` is a superseded draft of Method B (row/column vectors, no
+signature-style time augmentation) kept for now but no longer part of the
+active plan - see PLAN.md's Checkpoint 3 status note.
 
 No signature computation happens in this module - see `PLAN.md`.
 """
 
 import torch
+import torch.nn.functional as F
 
 
 def time_channel(n: int) -> torch.Tensor:
@@ -47,7 +54,7 @@ def make_pixel_order(k: int = 64, seed: int = 0,
 
 def patch_sv_stream(images: torch.Tensor, pixel_order: torch.Tensor,
                      mode: str = "top1") -> torch.Tensor:
-    """Method 1 stream construction.
+    """Method A stream construction.
 
     images: (N, 28, 28) float32
     pixel_order: (K, 2) int64 from make_pixel_order
@@ -77,8 +84,86 @@ def patch_sv_stream(images: torch.Tensor, pixel_order: torch.Tensor,
     return torch.cat([t.unsqueeze(-1), sigma], dim=-1).to(torch.float32)
 
 
+def make_reference_lines(angles_deg: tuple = (0, 90), counts: tuple = (8, 8),
+                          points_per_line: int = 32,
+                          image_size: int = 28, seed: int = 0) -> torch.Tensor:
+    """Return (sum(counts), points_per_line, 2) float32 tensor of (row, col)
+    continuous sample coordinates for Method B's reference lines.
+
+    `angles_deg[i]` contributes `counts[i]` evenly-spaced parallel lines:
+    angle 0 = horizontal (rows evenly spaced across image height via
+    `linspace(0, image_size - 1, count)`, each line sampled left to right);
+    angle 90 = vertical (columns evenly spaced across image width, each line
+    sampled top to bottom). Every point lies in [0, image_size - 1] by
+    construction - no clipping needed. Only angles 0 and 90 (mod 180) are
+    supported for now; arbitrary angles need clipping logic, deferred to
+    Stage 8. `seed` is reserved for future randomized variants - current
+    construction is deterministic without it.
+    """
+    if len(angles_deg) != len(counts):
+        raise ValueError("angles_deg and counts must have the same length")
+
+    along = torch.linspace(0, image_size - 1, points_per_line)
+    line_groups = []
+    for angle, count in zip(angles_deg, counts):
+        if count == 0:
+            continue
+        angle = angle % 180
+        if angle not in (0, 90):
+            raise ValueError(
+                f"angle {angle} not supported: only 0 (horizontal) and 90 "
+                "(vertical) are guaranteed in-bounds without clipping."
+            )
+        cross = torch.linspace(0, image_size - 1, count)
+        if angle == 0:
+            rows = cross.view(count, 1).expand(count, points_per_line)
+            cols = along.view(1, points_per_line).expand(count, points_per_line)
+        else:
+            cols = cross.view(count, 1).expand(count, points_per_line)
+            rows = along.view(1, points_per_line).expand(count, points_per_line)
+        line_groups.append(torch.stack([rows, cols], dim=-1))
+
+    if not line_groups:
+        return torch.empty(0, points_per_line, 2, dtype=torch.float32)
+    return torch.cat(line_groups, dim=0).to(torch.float32)
+
+
+def line_stream(images: torch.Tensor, lines: torch.Tensor) -> torch.Tensor:
+    """Method B stream construction.
+
+    images: (N, 28, 28) float32
+    lines: (num_lines, points_per_line, 2) float32 from
+           `make_reference_lines`, columns [row, col] in continuous
+           pixel-index coordinates.
+    returns: (N, num_lines, points_per_line, 2) float32, columns
+             [t, intensity]. Intensity is read via batched bilinear
+             interpolation (`grid_sample`, no Python loop over images);
+             t = time_channel(points_per_line), identical for every line and
+             every image. Lines stay separate in this output - see
+             Method_B.md's "no cross-line concatenation" note.
+    """
+    n, h, w = images.shape
+    num_lines, points_per_line, _ = lines.shape
+
+    x_norm = 2 * lines[..., 1] / (w - 1) - 1
+    y_norm = 2 * lines[..., 0] / (h - 1) - 1
+    grid = torch.stack([x_norm, y_norm], dim=-1)  # (num_lines, points_per_line, 2)
+    grid = grid.unsqueeze(0).expand(n, num_lines, points_per_line, 2)
+
+    intensity = F.grid_sample(
+        images.unsqueeze(1), grid, mode="bilinear",
+        align_corners=True, padding_mode="border",
+    ).squeeze(1)  # (N, num_lines, points_per_line)
+
+    t = time_channel(points_per_line).view(1, 1, points_per_line).expand(
+        n, num_lines, points_per_line
+    )
+    return torch.stack([t, intensity], dim=-1).to(torch.float32)
+
+
 def row_stream(images: torch.Tensor, axis: str = "rows") -> torch.Tensor:
-    """Method 2 stream construction.
+    """Superseded draft of Method B - see the module docstring and PLAN.md's
+    Checkpoint 3 status note. Kept for now, not part of the active plan.
 
     images: (N, 28, 28) float32
     returns: (N, 28, 28) float32.

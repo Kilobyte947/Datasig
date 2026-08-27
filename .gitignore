@@ -15,3 +15,8 @@ mnist_lipschitz/data/*
 
 mnist_lipschitz/adversarial/results/*
 !mnist_lipschitz/adversarial/results/.gitkeep
+
+signature_distance/results/*
+!signature_distance/results/.gitkeep
+
+data/

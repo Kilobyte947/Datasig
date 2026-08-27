@@ -87,61 +87,80 @@ Checkpoint 2, tests passing).
 
 ### Method B — reference-line stream (interpolated path)
 
-For a fixed set of 15 straight reference lines through the 28×28 grid (same lines
-for every image), sample pixel intensity at a fixed number of points along each
-line, and join the sampled points into a path via straight-line interpolation.
+For a fixed set of horizontal + vertical reference lines through the 28×28 grid
+(same lines for every image), sample pixel intensity at a fixed number of points
+along each line, joined into a `[t, intensity]` path. Full design detail,
+rationale, and test plan: `Method_B.md`.
 
 Design decisions (fixed, do not change without flagging):
 
-- **Shared deterministic line set.** The 15 lines are fixed once (e.g. by seed)
-  and reused identically for every image, mirroring Method A's shared pixel
-  ordering — same rationale: makes the stream a deterministic, comparable
-  feature across images. Save the line geometry (endpoints or angle/offset
-  parameterization) to disk as an artifact, same pattern as
-  `artifacts/pixel_order_seed0.npy`.
-- **Sampling off the pixel grid.** Line points will generally not land exactly on
-  pixel centers; intensity at each sample point should be read via bilinear
-  interpolation over the image, not nearest-pixel snapping.
-- **Points per line.** Fixed number of sample points per line, exposed as a
-  parameter (tentative default TBD at implementation time — pick something in
-  the same spirit as Method A's `K=64`, e.g. a few dozen points per line).
-- **Path join.** Straight-line interpolation between consecutive sampled points
-  for the basic version (curved joins are a Stage 8 sweep variant, not default).
-- **Open detail to settle at implementation time:** the exact geometry of the 15
-  fixed lines (e.g. evenly-spaced angles through the image center, vs. a mix of
-  axis-aligned/diagonal lines with varied offsets) is not yet pinned down and
-  should be decided — and flagged — when Checkpoint 3 is actually implemented.
+- **`make_reference_lines(angles_deg, counts, points_per_line, image_size, seed)`
+  — one parameterized function, not separate per-orientation implementations.**
+  Default `angles_deg=(0, 90), counts=(8, 8)` (16 lines total: 8 horizontal + 8
+  vertical); any other split (15:0, 0:15, 12:3, ...) is a different call to the
+  same function, keeping the orientation split tunable for Stage 8 rather than
+  hardcoded.
+- **Horizontal/vertical only, no clipping.** Angle 0 = rows evenly spaced across
+  image height, each sampled left→right; angle 90 = columns evenly spaced across
+  image width, each sampled top→bottom. Every point is in `[0, image_size - 1]`
+  by construction — no bounding-box or circle clipping needed (an earlier
+  circle-based geometry draft was dropped for exactly this reason: unnecessary
+  complexity vs. axis-aligned lines). Arbitrary angles would need clipping logic;
+  deferred to Stage 8, not currently supported (`ValueError` otherwise).
+- **Sampling off the pixel grid.** Line points generally don't land on pixel
+  centers; intensity is read via batched bilinear interpolation
+  (`torch.nn.functional.grid_sample`), not nearest-pixel snapping.
+- **Points per line.** `points_per_line = 32` default, exposed as a parameter,
+  real tuning deferred to Stage 8.
+- **No cross-line concatenation.** Each line's future signature (Phase 2) is
+  computed independently over its own points only; lines are combined by
+  concatenating resulting signature vectors, never by concatenating raw streams
+  first. Already satisfied by `line_stream`'s output shape (one stream per line,
+  never flattened) — no extra code needed for this.
+- Shared `time_channel` helper from Checkpoint 2 reused per line (see
+  `Method_B.md`), and the artifact convention mirrors
+  `artifacts/pixel_order_seed0.npy` → `artifacts/reference_lines_seed0.npy`.
 
-Stream shape per image: `(15, P, 2)` or equivalent flattened form, columns
-`[t, intensity]` per line (P = points per line), analogous to Method A's
-time-augmented stream.
+Stream shape per image: `(num_lines, points_per_line, 2)`, columns
+`[t, intensity]` per line — `(16, 32, 2)` for the default config, analogous to
+Method A's time-augmented stream.
 
-**Status: not yet implemented.** An earlier draft of this plan had a different
+**Status: implemented** (`make_reference_lines`, `line_stream` in `streams.py`,
+Checkpoint 3, tests passing). An earlier draft of this plan had a different
 Method 2 (row/column vector stream, traversing all 28 rows or columns directly as
 28-dimensional vectors) implemented at this checkpoint instead — see `row_stream`
-in `streams.py`. That method is superseded by the reference-line method above and
-no longer part of the active plan. `row_stream` remains in the repo for now but
-should be reconciled (replaced or removed) in a follow-up commit when Checkpoint 3
-is actually implemented against this updated plan.
+in `streams.py`. That method is superseded by the reference-line method above,
+kept in the repo for now, and no longer part of the active plan.
 
 ## Repository layout
 
 ```
 signature_distance/
 ├── PLAN.md                  # this file
-├── PHASE1_SUMMARY.md         # written after Checkpoint 3's gate passes (currently reflects the old Method 2 — needs a refresh once Method B lands)
-├── streams.py                # stream construction (Phase 1 scope)
-├── data_pool.py               # fixed evaluation pool loading (Phase 1 scope)
+├── PHASE1_SUMMARY.md         # written after Checkpoint 3's gate passes
+├── Method_B.md                # Method B's concrete design/implementation plan
+├── streams.py                # stream construction (Phase 1 scope, both methods)
+├── data_pool.py               # fixed evaluation pool loading (Phase 1 scope, shared)
+├── plots.py                    # Method B display plots only (see note below)
+├── run_experiment.py           # Method B demo driver only (see note below)
+├── notebook_method_b.ipynb     # Method B's own display notebook (Phase 1)
 ├── tests/
 │   ├── test_data_pool.py
 │   └── test_streams.py
-└── artifacts/
-    └── pixel_order_seed0.npy   # created by Checkpoint 2; Method B needs an analogous line-geometry artifact
+├── artifacts/
+│   ├── pixel_order_seed0.npy       # created by Checkpoint 2
+│   └── reference_lines_seed0.npy   # created by Checkpoint 3
+└── results/                    # gitignored, Method B demo figures (.gitkeep tracked)
+
+# Nick's Method A analog (plots/driver/notebook) lives in its own files,
+# not added to plots.py/run_experiment.py above - kept separate deliberately
+# so neither side's Phase-1 presentation work overlaps with the other's.
 
 # Future phases (reference only, not created in Phase 1):
 #   signatures.py    — Phase 2, truncated signature computation via roughpy-jax
 #   distances.py      — Phase 3, Euclidean distance over concatenated signature vectors
-#   notebook_signature_distance.ipynb — Phase 6, driver notebook
+#   notebook_signature_distance.ipynb — Phase 6, combined driver notebook once both
+#     methods reach the signature/distance stage (distinct from notebook_method_b.ipynb)
 ```
 
 Style constraints (consistent with the rest of the project):
@@ -258,60 +277,67 @@ Test gate (`tests/test_streams.py`, Method A section):
    from two different pixel orderings differ (this documents WHY the shared
    fixed ordering matters).
 
-**Status: done** — implemented in the repo as "Method 1"; functionally identical
-to Method A above, just needs a naming pass (Method 1 → Method A) for consistency
-with this plan.
+**Status: done.**
 
 ---
 
 ## Checkpoint 3 — Method B streams (`streams.py`)
 
-Function to implement (interface sketch — pin down exact signature at
-implementation time, resolving the open geometry detail noted under Method B
-above):
+Full design detail and rationale: `Method_B.md`. Implemented as:
 
 ```python
-def line_stream(images: torch.Tensor, lines: torch.Tensor,
-                points_per_line: int = ...) -> torch.Tensor:
+def make_reference_lines(angles_deg: tuple = (0, 90), counts: tuple = (8, 8),
+                          points_per_line: int = 32,
+                          image_size: int = 28, seed: int = 0) -> torch.Tensor:
+    """Return (sum(counts), points_per_line, 2) float32 tensor of (row, col)
+    continuous sample coordinates. angles_deg[i] gets counts[i] evenly-spaced
+    parallel lines (0 deg = horizontal, 90 deg = vertical); only 0/90 are
+    currently supported (in-bounds by construction, no clipping)."""
+
+def line_stream(images: torch.Tensor, lines: torch.Tensor) -> torch.Tensor:
     """Method B stream construction.
 
     images: (N, 28, 28) float32
-    lines: fixed line geometry (from a make_reference_lines()-style helper,
-           analogous to make_pixel_order), shared across all images.
-    returns: (N, num_lines, points_per_line, 2) float32 (or a flattened
-             equivalent), columns [t, intensity] per line, intensity sampled
-             via bilinear interpolation along each line and joined via
-             straight-line interpolation between sample points.
+    lines: (num_lines, points_per_line, 2) from make_reference_lines.
+    returns: (N, num_lines, points_per_line, 2) float32, columns
+             [t, intensity]; intensity via batched grid_sample bilinear
+             interpolation, t via the shared time_channel helper.
     """
 ```
 
-Test gate (`tests/test_streams.py`, Method B section — draft, refine at
-implementation time):
+Test gate (`tests/test_streams.py`, Method B section):
 
-1. **Shapes**: output matches the documented shape for a small batch.
-2. **Determinism**: same seed → identical line geometry; same image passed
+1. **Shapes**: `(16, 32, 2)` for the default config; `angles_deg`/`counts`
+   combinations (all-horizontal, all-vertical, uneven mixes) produce the
+   expected line count via the same function.
+2. **In-bounds**: every `(row, col)` in `make_reference_lines` lies in
+   `[0, image_size - 1]`, across configurations.
+3. **Directionality**: horizontal lines' column coordinate increases along the
+   line; vertical lines' row coordinate increases along the line.
+4. **Determinism**: same call → identical line geometry; same image passed
    twice → bitwise-identical streams.
-3. **Interpolation correctness**: for a line whose sample points land exactly on
-   pixel centers, sampled intensity equals the raw pixel value exactly (or to
-   float tolerance); for a constant image, every sampled intensity equals that
-   constant regardless of line geometry.
-4. **Time channel**: per-line time coordinate equals
-   `arange(points_per_line) / (points_per_line - 1)`.
-5. **Line sensitivity sanity check**: for a non-constant image, streams built
-   from two different line sets differ (mirrors Method A's ordering-sensitivity
-   check).
+5. **Interpolation correctness**: a sample point exactly on a pixel center
+   equals the raw pixel value (checked for both a horizontal and a vertical
+   line); a constant image gives constant intensity everywhere.
+6. **Time channel**: per-line time coordinate equals
+   `time_channel(points_per_line)` exactly, for every line.
+7. **Line sensitivity sanity check**: streams built from two different
+   `angles_deg`/`counts` configs differ for a non-constant image (mirrors
+   Method A's ordering-sensitivity check).
+8. **Invalid input**: mismatched `angles_deg`/`counts` lengths, or an angle
+   other than 0/90, raise `ValueError`.
 
-**Status: not yet implemented** — see the "Status" note under Method B above.
-This checkpoint currently exists in the repo as a different method (row/column
-vector stream, `row_stream`); that needs to be replaced with the reference-line
-method described here before this checkpoint can be marked done.
+**Status: done** (`make_reference_lines`, `line_stream` in `streams.py`, 33
+tests passing including the above). `row_stream` — the row/column vector
+stream that previously occupied this checkpoint — is superseded, kept in the
+repo, not part of the active plan (follow-up: decide whether to remove it).
 
-Final task for this phase (after the gate passes, once Method B replaces the
-current row/column stream): refresh `signature_distance/PHASE1_SUMMARY.md` to
-state (a) the exact shapes produced by Method A and Method B on the default pool
-(1000 images), (b) wall-clock time to build all streams on CPU, and (c)
-confirmation that no signature/distance code was written. Then STOP — do not
-proceed to Phase 2 without explicit sign-off.
+Final task for this phase (after the gate passes): refresh
+`signature_distance/PHASE1_SUMMARY.md` to state (a) the exact shapes produced
+by Method A and Method B on the default pool (1000 images), (b) wall-clock
+time to build all streams on CPU, and (c) confirmation that no signature/
+distance code was written. **Done** — see `PHASE1_SUMMARY.md`. Then STOP — do
+not proceed to Phase 2 without explicit sign-off.
 
 ---
 
