@@ -67,7 +67,14 @@
       "Bash(.venv/bin/python -c \"import ast; ast.parse\\(open\\('mnist_lipschitz/adversarial/plots.py'\\).read\\(\\)\\); print\\('syntax ok'\\)\")",
       "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/2cadc5d6-f6e0-4041-a460-97f93910c106/scratchpad/append_mahalanobis_notebook.py\")",
       "Bash(.venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/ --collect-only -q)",
-      "Bash(git rev-list *)"
+      "Bash(git rev-list *)",
+      "Bash(git -C \"/Users/yichaowang/Documents/Part A/Datasig project/code\" worktree list)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/ -v)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_data_pool.py -v)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_streams.py -v)",
+      "Bash(git rebase *)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/ -q)",
+      "Bash(.venv/bin/pip list *)"
     ]
   }
 }
