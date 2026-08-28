@@ -7,9 +7,7 @@ proceed to the next checkpoint until all tests for the current one pass.** Repor
 which checkpoint you are on and the test results at each gate.
 
 Two stream-construction methods are used throughout, named consistently as
-**Method A** and **Method B** (this replaces an earlier draft where the two
-methods were numbered 1/2 and briefly got swapped between two independently
-written plans — the naming below is the reconciled, canonical version):
+**Method A** and **Method B**:
 
 - **Method A — patch singular-value stream.** The "convolution" method: a local,
   patch-based statistic computed at a fixed set of pixel locations.
@@ -26,8 +24,7 @@ shape for what comes next** — they must **NOT** be implemented in this phase.
 Specifically, in this phase:
 
 - Do NOT compute signatures (truncated or otherwise).
-- Do NOT install or import `iisignature`, `signatory`, `sigkernel`, `roughpy`, or
-  `roughpy-jax`.
+- Do NOT install or import `iisignature`, `signatory`, `sigkernel`, `roughpy`, or `roughpy-jax`.
 - Do NOT compute any distances or evaluation metrics.
 - Stop after Checkpoint 3's test gate passes and produce the summary described there.
 
@@ -52,9 +49,7 @@ Both methods use fixed, non-learned constructions only — no dependence on the
 trained classifier's own features, deliberately, to stay clear of the
 self-referential-metric problem documented elsewhere in the project.
 
-Phase 1 (this document's in-scope part) constructs the *streams* (paths) from
-images under both methods. Later phases (documented below, not implemented yet)
-compute truncated signatures of these streams and evaluate the induced distance.
+Phase 1 constructs the *streams* (paths) from images under both methods. Later phases (documented below, not implemented yet) compute truncated signatures of these streams and evaluate the induced distance.
 
 ### Method A — patch singular-value stream (time-augmented)
 
@@ -82,15 +77,11 @@ Design decisions (fixed, do not change without flagging):
 
 Stream shape per image: `(K, 2)` float32, columns `[t, sigma1]`.
 
-**Status: implemented** (`make_pixel_order`, `patch_sv_stream` in `streams.py`,
-Checkpoint 2, tests passing).
+**Status: implemented** (`make_pixel_order`, `patch_sv_stream` in `streams.py`, Checkpoint 2, tests passing).
 
 ### Method B — reference-line stream (interpolated path)
 
-For a fixed set of horizontal + vertical reference lines through the 28×28 grid
-(same lines for every image), sample pixel intensity at a fixed number of points
-along each line, joined into a `[t, intensity]` path. Full design detail,
-rationale, and test plan: `Method_B.md`.
+For a fixed set of horizontal + vertical reference lines through the 28×28 grid (same lines for every image), sample pixel intensity at a fixed number of points along each line, joined into a `[t, intensity]` path. Full design detail, rationale, and test plan: `Method_B.md`.
 
 Design decisions (fixed, do not change without flagging):
 
@@ -126,11 +117,7 @@ Stream shape per image: `(num_lines, points_per_line, 2)`, columns
 Method A's time-augmented stream.
 
 **Status: implemented** (`make_reference_lines`, `line_stream` in `streams.py`,
-Checkpoint 3, tests passing). An earlier draft of this plan had a different
-Method 2 (row/column vector stream, traversing all 28 rows or columns directly as
-28-dimensional vectors) implemented at this checkpoint instead — see `row_stream`
-in `streams.py`. That method is superseded by the reference-line method above,
-kept in the repo for now, and no longer part of the active plan.
+Checkpoint 3, tests passing).
 
 ## Repository layout
 
@@ -277,7 +264,7 @@ Test gate (`tests/test_streams.py`, Method A section):
    from two different pixel orderings differ (this documents WHY the shared
    fixed ordering matters).
 
-**Status: done.**
+**Status: don't know**
 
 ---
 
