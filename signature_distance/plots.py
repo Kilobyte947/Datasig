@@ -1,16 +1,73 @@
-"""Plotting for signature_distance's Method B (reference-line stream) Phase 1
-output.
+"""Plotting for signature_distance: Method A (patch singular-value stream),
+Method B (reference-line stream), and the shared signature output.
 
-Pure plotting: takes already-computed data (images, lines, streams) and
-produces matplotlib figures, optionally saved to disk. No stream/data
-computation happens here - see streams.py / data_pool.py.
-
-Method B only: Method A's own plotting is Nick's, not built here, to avoid
-duplicating/overstepping into that side of the work.
+Pure plotting: takes already-computed data (images, pixel orders/lines,
+streams, signatures) and produces matplotlib figures, optionally saved to
+disk. No stream/signature computation happens here - see streams.py /
+data_pool.py / signatures.py.
 """
 
 import matplotlib.pyplot as plt
 import torch
+
+
+def plot_pixel_order(image: torch.Tensor, pixel_order: torch.Tensor,
+                      title: str = None, save_path=None):
+    """Method A: image with sampled (row, col) locations overlaid, colored
+    by visiting order (t)."""
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.imshow(image, cmap="gray", vmin=0, vmax=1)
+    order_idx = torch.arange(pixel_order.shape[0])
+    sc = ax.scatter(pixel_order[:, 1], pixel_order[:, 0], c=order_idx,
+                     cmap="viridis", s=25, edgecolors="white", linewidths=0.5)
+    ax.set_title(title or "Method A: patch pixel order")
+    ax.axis("off")
+    fig.colorbar(sc, ax=ax, label="visit order (t)", fraction=0.046)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_patch_sv_stream(stream: torch.Tensor, title: str = None, save_path=None):
+    """Method A: sigma1 vs. t for one image's (K, 2) stream."""
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.plot(stream[:, 0], stream[:, 1], marker="o", markersize=3)
+    ax.set_xlabel("t")
+    ax.set_ylabel("sigma1")
+    ax.set_title(title or "Method A stream")
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_signature(sig: torch.Tensor, title: str = None, save_path=None):
+    """Method-agnostic: bar chart of one signature vector's coefficients
+    (index 0 is always the constant term, 1.0)."""
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.bar(range(sig.shape[0]), sig, color="tab:blue")
+    ax.set_xlabel("signature term index")
+    ax.set_ylabel("value")
+    ax.set_title(title or "Signature")
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_line_signatures(sig_batch: torch.Tensor, title: str = None, save_path=None):
+    """Method B: heatmap of per-line signatures, one row per line.
+
+    sig_batch: (num_lines, signature_dim), e.g. the 16 independent
+    per-line signatures for one image (never concatenated into one raw
+    stream before this point - each row is its own line's signature)."""
+    fig, ax = plt.subplots(figsize=(6, 4))
+    im = ax.imshow(sig_batch, aspect="auto", cmap="viridis")
+    ax.set_xlabel("signature term index")
+    ax.set_ylabel("line index")
+    ax.set_title(title or "Method B: per-line signatures")
+    fig.colorbar(im, ax=ax, label="value", fraction=0.046)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
 
 
 def plot_reference_lines(image: torch.Tensor, lines: torch.Tensor,

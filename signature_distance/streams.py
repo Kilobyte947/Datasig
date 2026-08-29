@@ -18,11 +18,7 @@ No signature computation happens in this module - see `PLAN.md`.
 
 import torch
 import torch.nn.functional as F
-import roughpy_jax as rpj
-from jax import numpy as jnp
-from roughpy_jax.intervals import IntervalType, Partition
-from roughpy_jax.streams import LieIncrementStream, PiecewiseAbelianStream
-import numpy as np
+
 
 def time_channel(n: int) -> torch.Tensor:
     """Return the (n,) float32 normalised step index arange(n) / (n - 1),
@@ -66,13 +62,12 @@ def patch_sv_stream(images: torch.Tensor, pixel_order: torch.Tensor,
              with t = arange(K) / (K - 1).
              (N, K, 4) for mode="all3", columns [t, s1, s2, s3], s1 >= s2 >= s3.
     """
-    print(f"patch_sv_stream: images.shape={images.shape}, pixel_order.shape={pixel_order.shape}, mode={mode}")
     if mode not in ("top1", "all3"):
         raise ValueError(f"unknown mode: {mode!r}")
 
-    n = images.shape[0] #number of images
-    k = pixel_order.shape[0] #number of pixels to sample
-    offsets = torch.tensor([-1, 0, 1], dtype=torch.int64) 
+    n = images.shape[0]
+    k = pixel_order.shape[0]
+    offsets = torch.tensor([-1, 0, 1], dtype=torch.int64)
 
     rows = pixel_order[:, 0]  # (K,)
     cols = pixel_order[:, 1]  # (K,)
@@ -85,74 +80,10 @@ def patch_sv_stream(images: torch.Tensor, pixel_order: torch.Tensor,
     t = time_channel(k).view(1, k).expand(n, k)
 
     if mode == "top1":
-        data_stream = torch.concat([t.unsqueeze(-1), sigma[..., 0:1]], dim=-1).to(torch.float32) #shape (N, K, 2)
+        return torch.stack([t, sigma[..., 0]], dim=-1).to(torch.float32)
+    return torch.cat([t.unsqueeze(-1), sigma], dim=-1).to(torch.float32)
 
 
-        # 1) Move to CPU and to numpy, then to JAX
-        np_arr = data_stream.cpu().numpy()        # shape (N, K, 2)
-        jax_arr = jnp.asarray(np_arr)              # JAX array
-
-        N, K, D = np_arr.shape
-        assert D == 2, "expected last dimension == 2"
-
-        # 2) Create a Lie basis (width must equal D). Choose depth as needed.
-        DEPTH = 3
-        LIE_BASIS = rpj.LieBasis(width=2, depth=DEPTH)
-        M = LIE_BASIS.size()                              # M == 5 in your case
-        TENSOR_BASIS = rpj.to_tensor_basis(LIE_BASIS)
-
-        # 3) Helper to make one PiecewiseAbelianStream from a single (K, D) array
-        def make_piecewise_stream(one_stream_array):
-
-            print("basis size:", LIE_BASIS.size())
-            print("one row shape:", one_stream_array.shape)   # expect (K, 2) so one row is (2,)
-            pad_len = M - D
-            if pad_len < 0:
-                raise ValueError(f"data dimension {D} larger than basis size {M}")
-            if pad_len == 0:
-                padded = one_stream_array
-            else:
-                zeros_tail = jnp.zeros((one_stream_array.shape[0], pad_len), dtype=jnp.float32)
-            padded = jnp.concatenate([one_stream_array, zeros_tail], axis=1)  # (K, M)
-            # one_stream_array is a JAX array shape (K, D) or numpy array shape (K, D)
-            # Map each row to an rpj.Lie element (coordinates w.r.t. LIE_BASIS)
-            lie_elems = tuple(rpj.Lie(padded[i], LIE_BASIS) for i in range(K))
-
-            # Partition endpoints: K intervals -> K+1 endpoints. Use array-like (list) to be JAX-jit friendly.
-            endpoints = jnp.arange(K + 1, dtype=jnp.float32).tolist()
-            partition = Partition(endpoints, IntervalType.ClOpen)
-
-            # Build the PiecewiseAbelianStream
-            stream = PiecewiseAbelianStream(
-                _data=lie_elems,
-                _partition=partition,
-                _lie_basis=LIE_BASIS,
-                _group_basis=TENSOR_BASIS,
-            )
-            return stream
-        print('The shape of the jax array is:', jax_arr.shape)
-        # 4) Build streams for all N samples (simple Python loop)
-        streams = [make_piecewise_stream(jax_arr[i]) for i in range(N)]
-
-        # 5) Compute signatures (or log-signatures) for each stream
-        signatures = []
-        log_signatures = [] #Another representation of the signature, which is more compact and often more useful in practice. Not using at the moment
-        for stream in streams:
-            sig = stream.signature(stream.support)
-            log_sig = stream.log_signature(stream.support)
-
-            # Convert to numpy arrays of coordinates
-            sig_arr = np.asarray(sig.data)
-            log_sig_arr = np.asarray(log_sig.data)
-
-            signatures.append(sig_arr)
-            log_signatures.append(log_sig_arr)
-
-        # Now signatures is a list of N numpy arrays (signature coordinates)
-        print("Computed", len(signatures), "signatures. First signature shape:", signatures[0].shape)
-        return torch.from_numpy(np.stack(signatures))#torch.stack(signatures).to(torch.float32)  # shape (N, signature_dim)
-        #torch.stack([t, sigma[..., 0]], dim=-1).to(torch.float32)
-    return torch.cat([t.unsqueeze(-1), sigma], dim=-1).to(torch.float32) #don't worry about this, we will only use the top singular value.
 def make_reference_lines(angles_deg: tuple = (0, 90), counts: tuple = (8, 8),
                           points_per_line: int = 32,
                           image_size: int = 28, seed: int = 0) -> torch.Tensor:
