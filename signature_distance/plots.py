@@ -104,3 +104,25 @@ def plot_line_stream(stream: torch.Tensor, title: str = None, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     return fig
+
+
+def plot_per_line_auc_ranking(ranked: list, title: str = None, save_path=None):
+    """Method B: bar chart of same/different-digit AUC per measure (16
+    individual lines + the merged 496-dim distance), ranked highest to
+    lowest, from `per_line_diagnostics.run_per_line_auc_diagnostic`'s
+    `ranked` output. The merged bar is colored differently so it's easy to
+    see how many individual lines rank above/below it."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    names = [name for name, _ in ranked]
+    aucs = [entry["auc"] for _, entry in ranked]
+    colors = ["tab:orange" if name == "merged" else "tab:blue" for name in names]
+    ax.bar(range(len(names)), aucs, color=colors)
+    ax.axhline(0.5, color="gray", linestyle="--", linewidth=1, label="chance (AUC=0.5)")
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names, rotation=60, ha="right", fontsize=8)
+    ax.set_ylabel("same/different-digit AUC")
+    ax.set_title(title or "Method B: per-line vs. merged distance AUC")
+    ax.legend()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig

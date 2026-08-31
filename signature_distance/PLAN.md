@@ -356,19 +356,55 @@ because it runs without error.
 
 ### Phase 3 — Distance function (Stage 3)
 
-- Concatenate per-stream signature vectors into one feature vector per image.
-- Distance = Euclidean on this concatenated vector (basic version).
-- PCA or covariance-norm projection is a considered refinement, not required for
-  the first pass.
+**Status: implemented** (`distances.py`). Before concatenation: each signature
+is rescaled level-n by `r**n` (`rescale_signature`) — raw coefficients decay
+~1/n! with depth (verified: level-4 magnitudes ~4-50x smaller than level-1),
+so without this, Euclidean distance mostly measures the depth-1 terms. `r` is
+derived per method, not shared (`choose_rescale_factor`: geometric mean of the
+level-2..depth magnitude ratio, inverted) — Method A and B always stay two
+separate distance functions, never combined, so there's no need for a shared
+scale. Feature vector: Method A's rescaled signature is used directly
+(`method_a_feature_vector`, identity); Method B's 16 independent per-line
+rescaled signatures are concatenated (`method_b_feature_vector`) — the first
+point the lines combine, per the "no cross-line concatenation" rule. Distance
+= Euclidean (`pairwise_euclidean_distance`, `torch.cdist`) on the resulting
+vector, for each method independently.
 
 ### Phase 4 — Sanity check (Stage 4)
 
-- Within-digit vs. cross-digit distance check, same protocol as used for the
-  existing Euclidean/Mahalanobis metrics in `mnist_lipschitz`: same-label pairs
-  should be closer than different-label pairs on average, for both Method A and
-  Method B.
-- Cheap, label-based, no trained model needed — run before anything else in
-  Phase 5 to confirm the basic construction isn't broken.
+**Status: implemented, results ambiguous — not yet a green light for Phase 5.**
+`within_vs_cross_digit_distance` in `distances.py`; run via
+`run_experiment.sanity_check_demo`. On 300 images (30/class, seed 0, depth 4):
+
+| | r | within-digit mean | cross-digit mean | cross/within ratio |
+|---|---|---|---|---|
+| Method A | 1.656 | 14.60 | 17.18 | **1.176** |
+| Method B | 2.860 | 28.60 | 33.17 | **1.160** |
+
+Both show the right *direction* (within < cross, consistently, with or without
+rescaling — rescaling barely moved the ratio for either method: 1.200→1.176
+for A, 1.189→1.160 for B), so neither is behaving nonsensically. But the
+effect size is small and similar in magnitude to plain raw-pixel Euclidean's
+own weak ratio in `mnist_lipschitz` (~1.13) — i.e. neither method is yet
+showing a *stronger* class-separation signal than the existing pixel-space
+baseline it's meant to improve on. Consistent with the background-sparsity
+finding for Method A (~67% of the 64 anchors land on near-zero-intensity
+patches on average) diluting its signal, though Method B (no such sparsity
+issue) shows a comparably weak ratio too, so that's not the whole story.
+Per the plan's own rule ("don't skip ahead if the sanity check is ambiguous"),
+**do not proceed to Phase 5 based on this alone** — worth discussing further
+(e.g. non-adjacent anchor ordering for Method A - see below - before
+concluding either method's signal ceiling) before committing to the
+adversarial evaluation.
+
+**Also worth fixing regardless of the above:** `make_pixel_order` (Method A)
+builds its 64-point order via `torch.randperm` — a random sample in random
+order, not a spatially-adjacent walk. Measured: mean step between consecutive
+anchors is 14.69 px (range 1.41-30.41 px) on a 26x26 interior grid — a
+coherent walk would show steps consistently near 1-2 px. Since a signature is
+order-sensitive by construction, this order not corresponding to a spatially
+coherent traversal is a real design gap, separate from the sparsity finding
+above, and likely also contributes to Method A's weak signal.
 
 ### Phase 5 — Imperceptible adversarial examples + Lipschitz ratio (Stage 5)
 

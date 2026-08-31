@@ -9,8 +9,17 @@ from pathlib import Path
 
 import torch
 
+import torch
+
 from signature_distance import plots
 from signature_distance.data_pool import load_eval_pool
+from signature_distance.distances import (
+    choose_rescale_factor,
+    method_a_feature_vector,
+    method_b_feature_vector,
+    rescale_signature,
+    within_vs_cross_digit_distance,
+)
 from signature_distance.signatures import signature_of_stream
 from signature_distance.streams import (
     line_stream,
@@ -94,4 +103,51 @@ def method_a_demo(n_digits: int = 3, seed: int = 0) -> dict:
         "images": images, "labels": labels,
         "pixel_order": pixel_order,
         "figures": figures,
+    }
+
+
+def sanity_check_demo(n_per_class: int = 30, seed: int = 0, depth: int = SIGNATURE_DEPTH) -> dict:
+    """PLAN.md Phase 4: within-digit vs. cross-digit mean distance, for
+    both methods independently, on a modest sample (default 300 images,
+    30/class). Order of operations, per plan: rescale each method's raw
+    signatures (r chosen empirically per method via
+    distances.choose_rescale_factor - see that function's docstring for
+    why a single shared r isn't used), build each method's per-image
+    feature vector (Method A: the signature itself; Method B: concatenate
+    the 16 independent per-line signatures - the first point the lines
+    combine), then run the sanity check. Returns raw and rescaled results
+    for both methods, plus the chosen r values, for comparison.
+    """
+    images, labels = load_eval_pool(n_per_class=n_per_class, seed=seed)
+
+    order = make_pixel_order(k=64, seed=seed)
+    sig_a_raw = signature_of_stream(patch_sv_stream(images, order), depth=depth)
+    r_a = choose_rescale_factor(sig_a_raw, depth=depth)
+    sig_a = rescale_signature(sig_a_raw, r=r_a, depth=depth)
+    vec_a_raw = method_a_feature_vector(sig_a_raw)
+    vec_a = method_a_feature_vector(sig_a)
+
+    lines = make_reference_lines()
+    stream_b = line_stream(images, lines)
+    sig_b_raw = torch.stack(
+        [signature_of_stream(stream_b[:, i], depth=depth) for i in range(stream_b.shape[1])],
+        dim=1,
+    )
+    r_b = choose_rescale_factor(sig_b_raw, depth=depth)
+    sig_b = rescale_signature(sig_b_raw, r=r_b, depth=depth)
+    vec_b_raw = method_b_feature_vector(sig_b_raw)
+    vec_b = method_b_feature_vector(sig_b)
+
+    return {
+        "n_images": images.shape[0],
+        "method_a": {
+            "r": r_a,
+            "raw": within_vs_cross_digit_distance(vec_a_raw, labels),
+            "rescaled": within_vs_cross_digit_distance(vec_a, labels),
+        },
+        "method_b": {
+            "r": r_b,
+            "raw": within_vs_cross_digit_distance(vec_b_raw, labels),
+            "rescaled": within_vs_cross_digit_distance(vec_b, labels),
+        },
     }
