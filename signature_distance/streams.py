@@ -9,10 +9,6 @@ Method_B.md for the full design rationale):
     horizontal/vertical reference lines through the image, each sampled into
     a time-augmented [t, intensity] stream via bilinear interpolation.
 
-`row_stream` is a superseded draft of Method B (row/column vectors, no
-signature-style time augmentation) kept for now but no longer part of the
-active plan - see PLAN.md's Checkpoint 3 status note.
-
 No signature computation happens in this module - see `PLAN.md`.
 """
 
@@ -159,23 +155,3 @@ def line_stream(images: torch.Tensor, lines: torch.Tensor) -> torch.Tensor:
         n, num_lines, points_per_line
     )
     return torch.stack([t, intensity], dim=-1).to(torch.float32)
-
-
-def row_stream(images: torch.Tensor, axis: str = "rows") -> torch.Tensor:
-    """Superseded draft of Method B - see the module docstring and PLAN.md's
-    Checkpoint 3 status note. Kept for now, not part of the active plan.
-
-    images: (N, 28, 28) float32
-    returns: (N, 28, 28) float32.
-      axis="rows": stream[n, i, :] is row i of image n (top to bottom).
-      axis="cols": stream[n, j, :] is column j of image n (left to right).
-
-    Does not mutate `images`; always returns a copy (via `.clone()` for
-    axis="rows", via `.transpose(1, 2).contiguous()` for axis="cols", which
-    also copies since the transposed view is non-contiguous).
-    """
-    if axis == "rows":
-        return images.clone()
-    if axis == "cols":
-        return images.transpose(1, 2).contiguous()
-    raise ValueError(f"unknown axis: {axis!r}")

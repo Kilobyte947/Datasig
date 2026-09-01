@@ -6,7 +6,6 @@ from signature_distance.streams import (
     make_reference_lines,
     patch_sv_stream,
     line_stream,
-    row_stream,
 )
 
 # ---------------------------------------------------------------------------
@@ -221,48 +220,3 @@ def test_line_stream_sensitivity():
     stream_a = line_stream(images, lines_a)
     stream_b = line_stream(images, lines_b)
     assert not torch.equal(stream_a, stream_b)
-
-
-# ---------------------------------------------------------------------------
-# Superseded Method B draft: row/column vector stream (see PLAN.md)
-# ---------------------------------------------------------------------------
-
-
-def test_row_stream_identity_rows():
-    images = torch.rand(4, 28, 28)
-    stream = row_stream(images, axis="rows")
-    assert stream.shape == (4, 28, 28)
-    for n in range(4):
-        for i in range(28):
-            assert torch.equal(stream[n, i], images[n, i, :])
-
-
-def test_row_stream_identity_cols():
-    images = torch.rand(4, 28, 28)
-    stream = row_stream(images, axis="cols")
-    assert stream.shape == (4, 28, 28)
-    for n in range(4):
-        for j in range(28):
-            assert torch.equal(stream[n, j], images[n, :, j])
-
-
-def test_row_stream_transpose_consistency():
-    images = torch.rand(4, 28, 28)
-    cols_direct = row_stream(images, axis="cols")
-    cols_via_transpose = row_stream(images.transpose(1, 2), axis="rows")
-    assert torch.equal(cols_direct, cols_via_transpose)
-
-
-def test_row_stream_no_mutation():
-    images = torch.rand(4, 28, 28)
-    original = images.clone()
-    _ = row_stream(images, axis="rows")
-    _ = row_stream(images, axis="cols")
-    assert torch.equal(images, original)
-
-
-def test_row_stream_determinism():
-    images = torch.rand(4, 28, 28)
-    stream1 = row_stream(images, axis="rows")
-    stream2 = row_stream(images, axis="rows")
-    assert torch.equal(stream1, stream2)
