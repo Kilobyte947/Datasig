@@ -9,6 +9,12 @@ derived independently per method exactly as in `run_experiment.sanity_check_demo
 (1.656 for A, 2.860 for B), applied before any level masking. Full method:
 `level_decomposition.py::run_level_decomposition`.
 
+Note: Method B's numbers here (r=2.860, depth=4) use its original
+8h+8v/depth-4 configuration, which predates `method_b_sweep.py`'s later
+adoption of a 12h+4v/depth-2 default (see `Method_B.md`) — still exactly
+reproducible as documented (the original config remains
+`make_reference_lines`'s own default), just not re-run against the new one.
+
 ## Variant × method table
 
 Ratio is cross-digit mean / within-digit mean; `all` reproduces the
@@ -92,5 +98,5 @@ already had to come from levels 2-4. This is carried forward as the honest
 finding, per this project's convention — it doesn't change anything about
 Phase 4's already-documented modest effect size relative to the pixel-space
 Euclidean baseline, and doesn't by itself motivate a scope change (e.g. to
-line placement) beyond what `per_line_auc_summary.md`'s border-line finding
-already flagged independently.
+line placement) beyond what `Method_B.md`'s per-line AUC diagnostic
+(border-line finding) already flagged independently.

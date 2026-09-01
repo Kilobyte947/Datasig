@@ -17,6 +17,14 @@ sweep retrains fresh again with the same recipe, so its own reported
 accuracies match too). Method A distance uses the fixed r≈1.656 from the
 Phase 4 sanity check, unmodified in both runs.
 
+Note: every Method B number cited below (Finding 3's comparison table) uses
+Method B's original 8h+8v/depth-4 configuration, which predates
+`method_b_sweep.py`'s later adoption of a 12h+4v/depth-2 default (see
+`Method_B.md`) — that default reaches a substantially higher per-path
+fold-ratio (~14.8-15x) than the original configuration's numbers used here.
+Finding 3's "narrow, inconsistent edge" for Method A almost certainly
+would not survive a re-comparison against the new default; not re-run here.
+
 ## Headline numbers
 
 | | eps | flip_frac | pixel ratio (adv) | pixel ratio (ctrl) | pixel adv/ctrl | Method A ratio (adv) | Method A ratio (ctrl) | Method A adv/ctrl |
@@ -29,8 +37,9 @@ Phase 4 sanity check, unmodified in both runs.
 | StrongCNN | 0.05 | 0.045 | 2.953 | 0.812 | **3.64** | 2.114 | 0.726 | **2.91** |
 
 "ctrl" = random (non-gradient-directed) noise, matched in L2 pixel-norm to
-the FGSM perturbation for the same image — same convention as
-`adversarial_eval_summary.md`.
+the FGSM perturbation for the same image — same convention as Method B's
+own adversarial evaluation (`Method_B.md`'s "Adversarial evaluation, round
+1" section).
 
 ## Finding 1: both distances separate adversarial from random-noise control, clearly
 
