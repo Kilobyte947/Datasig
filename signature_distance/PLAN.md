@@ -130,7 +130,8 @@ signature_distance/
 ├── data_pool.py               # fixed evaluation pool loading (Phase 1 scope, shared)
 ├── plots.py                    # Method B display plots only (see note below)
 ├── run_experiment.py           # Method B demo driver only (see note below)
-├── notebook_method_b.ipynb     # Method B's own display notebook (Phase 1)
+├── notebook_method_b_streams.ipynb       # Method B stream/signature construction (Phase 1/2)
+├── notebook_method_b_further_work.ipynb  # distance, sanity check, adversarial evals, sweep
 ├── tests/
 │   ├── test_data_pool.py
 │   └── test_streams.py
@@ -147,7 +148,7 @@ signature_distance/
 #   signatures.py    — Phase 2, truncated signature computation via roughpy-jax
 #   distances.py      — Phase 3, Euclidean distance over concatenated signature vectors
 #   notebook_signature_distance.ipynb — Phase 6, combined driver notebook once both
-#     methods reach the signature/distance stage (distinct from notebook_method_b.ipynb)
+#     methods reach the signature/distance stage (distinct from Method B's own notebooks)
 ```
 
 Style constraints (consistent with the rest of the project):
