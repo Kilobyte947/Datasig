@@ -6,6 +6,7 @@ not one" note).
 """
 
 import torch
+from sklearn.metrics import roc_auc_score, roc_curve
 
 
 def _level_sizes(width: int, depth: int) -> list:
@@ -129,3 +130,31 @@ def within_vs_cross_digit_distance(vectors: torch.Tensor, labels: torch.Tensor) 
         "cross_digit_mean": cross_mean,
         "ratio_cross_over_within": cross_mean / within_mean,
     }
+
+
+def auc_for_distance(same, dist_values, tpr_target: float = None) -> dict:
+    """Same/different-label AUC for one distance measure, treating
+    `-distance` as a same-label classifier score. Shared by
+    per_line_diagnostics.py (per-line vs. merged AUC ranking) and
+    method_b_sweep.py (per-line AUC across the hyperparameter grid) - both
+    previously computed this identically but independently, once each.
+
+    same: (n_pairs,) array-like, 1 if the pair shares a label, 0 otherwise.
+    dist_values: (n_pairs,) that measure's distance for each pair - both
+    typically built via `torch.triu_indices` over an (N, N) distance
+    matrix, by the caller (kept local to each caller since it's a couple
+    of trivial indexing lines, not worth abstracting further).
+    tpr_target: if given (e.g. 0.90), also returns the FPR and distance
+    threshold at that TPR operating point; omitted by default so callers
+    that only need the AUC (e.g. a large sweep) don't pay for
+    `roc_curve` unnecessarily.
+    """
+    scores = -dist_values
+    result = {"auc": float(roc_auc_score(same, scores))}
+    if tpr_target is not None:
+        fpr, tpr, thresh = roc_curve(same, scores)
+        idx = next((k for k, t in enumerate(tpr) if t >= tpr_target), len(tpr) - 1)
+        pct = int(tpr_target * 100)
+        result[f"fpr_at_tpr{pct}"] = float(fpr[idx])
+        result[f"distance_threshold_at_tpr{pct}"] = float(-thresh[idx])
+    return result

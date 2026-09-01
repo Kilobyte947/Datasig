@@ -14,10 +14,10 @@ signatures the merged distance is already built from.
 """
 
 import torch
-from sklearn.metrics import roc_auc_score, roc_curve
 
 from signature_distance.data_pool import load_eval_pool
 from signature_distance.distances import (
+    auc_for_distance,
     choose_rescale_factor,
     method_b_feature_vector,
     per_line_distances,
@@ -39,20 +39,6 @@ def _line_orientation_label(lines: torch.Tensor, line_idx: int) -> str:
     if horizontal:
         return f"horizontal (row={rows[0].item():.1f})"
     return f"vertical (col={cols[0].item():.1f})"
-
-
-def _auc_and_operating_point(same: "np.ndarray", dist_values: "np.ndarray",
-                              tpr_target: float = 0.90) -> dict:
-    scores = -dist_values  # higher score = more likely "same digit"
-    auc = roc_auc_score(same, scores)
-    fpr, tpr, thresh = roc_curve(same, scores)
-    idx = next((k for k, t in enumerate(tpr) if t >= tpr_target), len(tpr) - 1)
-    pct = int(tpr_target * 100)
-    return {
-        "auc": float(auc),
-        f"fpr_at_tpr{pct}": float(fpr[idx]),
-        f"distance_threshold_at_tpr{pct}": float(-thresh[idx]),
-    }
 
 
 def run_per_line_auc_diagnostic(n_per_class: int = 30, seed: int = 0,
@@ -98,11 +84,11 @@ def run_per_line_auc_diagnostic(n_per_class: int = 30, seed: int = 0,
 
     measures = {}
     merged_pair_dist = merged_dist_matrix[iu, ju].numpy()
-    measures["merged"] = _auc_and_operating_point(same, merged_pair_dist, tpr_target)
+    measures["merged"] = auc_for_distance(same, merged_pair_dist, tpr_target)
 
     for i in range(num_lines):
         line_pair_dist = per_line_dist_matrices[i][iu, ju].numpy()
-        entry = _auc_and_operating_point(same, line_pair_dist, tpr_target)
+        entry = auc_for_distance(same, line_pair_dist, tpr_target)
         entry["orientation"] = _line_orientation_label(lines, i)
         measures[f"line_{i}"] = entry
 

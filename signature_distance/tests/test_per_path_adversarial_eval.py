@@ -3,7 +3,11 @@ import torch
 from signature_distance.per_path_adversarial_eval import (
     BEST_LINE_INDEX,
     BORDER_LINE_INDICES,
+    EXCLUDED_LINES,
     INFORMATIVE_LINE_INDICES,
+    ROBUST_LINE_INDICES,
+    _pearson,
+    fold_ratio_robustness,
     per_line_rescaled_signatures,
     plot_spike_gallery,
     spike_analysis,
@@ -93,3 +97,55 @@ def test_plot_spike_gallery_runs():
     results = _fake_results()
     fig = plot_spike_gallery(results, "FakeModel", 0.03, pair_idx=0)
     assert fig is not None
+
+
+# ---------------------------------------------------------------------------
+# Robustness check (fold_ratio_robustness, run_robustness_report) - merged
+# from what was a separate per_path_ratio_robustness_check.py module.
+# ---------------------------------------------------------------------------
+
+
+def test_robust_line_indices_excludes_9_and_14():
+    assert EXCLUDED_LINES == (9, 14)
+    assert set(ROBUST_LINE_INDICES) == set(INFORMATIVE_LINE_INDICES) - {9, 14}
+    assert len(ROBUST_LINE_INDICES) == 10
+
+
+def test_pearson_known_cases():
+    assert abs(_pearson([1, 2, 3], [1, 2, 3]) - 1.0) < 1e-9
+    assert abs(_pearson([1, 2, 3], [3, 2, 1]) - (-1.0)) < 1e-9
+    assert _pearson([1, 1, 1], [1, 2, 3]) == 0.0  # zero variance in x - defined as 0, not NaN
+
+
+def test_fold_ratio_robustness_structure_and_line_counts():
+    results = _fake_results()
+    report = fold_ratio_robustness(results)
+    r = report["FakeModel"][0.03]
+
+    assert r["n_flipped"] == 5
+    assert set(r["fold_12"].keys()) == set(INFORMATIVE_LINE_INDICES)
+    assert set(r["fold_10"].keys()) == set(ROBUST_LINE_INDICES)
+    assert 9 not in r["fold_10"] and 14 not in r["fold_10"]
+    assert set(r["baseline_dist_10"].keys()) == set(ROBUST_LINE_INDICES)
+    assert -1.0 <= r["dist_fold_correlation_10"] <= 1.0
+
+
+def test_fold_ratio_robustness_handles_zero_flips():
+    results = _fake_results()
+    results["models"]["FakeModel"]["eps"][0.03]["flip_mask"] = torch.zeros(20, dtype=torch.bool)
+    report = fold_ratio_robustness(results)
+    assert report["FakeModel"][0.03]["n_flipped"] == 0
+    assert "fold_12" not in report["FakeModel"][0.03]
+
+
+def test_excluding_lines_cannot_introduce_a_new_adv_lt_control_violation():
+    # If every line in the 12-line set has adv > control, the 10-line
+    # subset (strictly fewer lines) must too - removing entries from an
+    # all-True set can't make it False. Direct correctness check on the
+    # reported boolean, not just an assumption.
+    results = _fake_results()
+    report = fold_ratio_robustness(results)
+    r = report["FakeModel"][0.03]
+    all_12_survive = all(v > 1.0 for v in r["fold_12"].values())
+    if all_12_survive:
+        assert r["all_10_survive_adv_gt_control"] is True

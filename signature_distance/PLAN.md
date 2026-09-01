@@ -317,8 +317,8 @@ Test gate (`tests/test_streams.py`, Method B section):
 
 **Status: done** (`make_reference_lines`, `line_stream` in `streams.py`, 33
 tests passing including the above). `row_stream` — the row/column vector
-stream that previously occupied this checkpoint — is superseded, kept in the
-repo, not part of the active plan (follow-up: decide whether to remove it).
+stream that previously occupied this checkpoint — was superseded and has
+since been removed from `streams.py`.
 
 Final task for this phase (after the gate passes): refresh
 `signature_distance/PHASE1_SUMMARY.md` to state (a) the exact shapes produced

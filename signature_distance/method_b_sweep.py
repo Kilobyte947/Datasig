@@ -3,16 +3,19 @@ points/line, truncation depth, interpolation) - Stage A cheap screen (no
 model training, per-line same/different-digit AUC) and Stage B full
 validation (per-path adversarial/control evaluation on finalists).
 
-Reuses all existing signature/distance/adversarial infrastructure
-unmodified: `make_reference_lines`/`line_stream` (streams.py),
-`signature_of_stream` (signatures.py), `choose_rescale_factor`/
-`rescale_signature`/`per_line_distances` (distances.py), and
+Reuses existing signature/distance/adversarial infrastructure:
+`make_reference_lines`/`line_stream` (streams.py), `signature_of_stream`
+(signatures.py), `choose_rescale_factor`/`rescale_signature`/
+`per_line_distances`/`auc_for_distance` (distances.py), and
 `SmallCNN`/`StrongCNN`/`train_classifier`/`fgsm_attack`/`margin`/
-`random_noise_perturbation` (method_b_adversarial_eval.py). Nothing in
-those files, or in per_line_diagnostics.py/per_path_adversarial_eval.py/
-per_path_ratio_robustness_check.py, is changed - this module only adds new
-stream-construction variants (a cubic-spline refinement on top of the
-existing linear stream) and new sweep/scoring orchestration.
+`random_noise_perturbation` (method_b_adversarial_eval.py). This module
+adds new stream-construction variants (a cubic-spline refinement on top of
+the existing linear stream) and new sweep/scoring orchestration.
+`per_line_aucs` below and `per_line_diagnostics.py` both need the same
+same/different-digit AUC computation (one hardcoded to the default
+geometry, one generalized over the sweep grid) - factored into
+`distances.auc_for_distance`, a small shared addition, rather than each
+keeping its own copy.
 
 Key efficiency fact this sweep relies on, verified directly rather than
 assumed: a depth-D truncated signature's first `1+2+...+2**d` coefficients
@@ -23,16 +26,17 @@ needs the expensive signature step run ONCE, at the maximum depth swept;
 all lower depths are prefix-sliced from that one result, not recomputed.
 """
 
-import math
-from itertools import product
-
 import numpy as np
 import torch
 from scipy.interpolate import CubicSpline
-from sklearn.metrics import roc_auc_score
 
 from signature_distance.data_pool import load_eval_pool
-from signature_distance.distances import choose_rescale_factor, per_line_distances, rescale_signature
+from signature_distance.distances import (
+    auc_for_distance,
+    choose_rescale_factor,
+    per_line_distances,
+    rescale_signature,
+)
 from signature_distance.method_b_adversarial_eval import (
     SmallCNN,
     StrongCNN,
@@ -104,18 +108,17 @@ def build_stream(images: torch.Tensor, angles_deg: tuple, counts: tuple,
 
 
 def per_line_aucs(sig: torch.Tensor, labels: torch.Tensor) -> list:
-    """Same/different-digit AUC per line, same methodology as
-    per_line_diagnostics.run_per_line_auc_diagnostic (not called directly -
-    that function is hardcoded to the default geometry/depth=4 - but
-    identical computation: -distance as score, roc_auc_score, over every
-    unique pair)."""
+    """Same/different-digit AUC per line - uses the same shared
+    `distances.auc_for_distance` helper `per_line_diagnostics.py` does
+    (that module is hardcoded to the default geometry/depth=4; this
+    version works for any geometry/depth, hence the separate call site)."""
     n = sig.shape[0]
     iu, ju = torch.triu_indices(n, n, offset=1)
     same = (labels[iu] == labels[ju]).numpy().astype(int)
     aucs = []
     for i in range(sig.shape[1]):
         d = torch.cdist(sig[:, i], sig[:, i], p=2)[iu, ju].numpy()
-        aucs.append(float(roc_auc_score(same, -d)))
+        aucs.append(auc_for_distance(same, d)["auc"])
     return aucs
 
 
