@@ -126,3 +126,70 @@ def plot_per_line_auc_ranking(ranked: list, title: str = None, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     return fig
+
+
+def plot_reference_lines_with_metric(image: torch.Tensor, lines: torch.Tensor,
+                                      metric_values, title: str = None,
+                                      colorbar_label: str = "metric",
+                                      cmap: str = "plasma", save_path=None):
+    """Method B: image with reference lines overlaid, each colored by a
+    per-line metric (e.g. fold-ratio, AUC) instead of orientation - shows
+    directly where on the image the highest/lowest-scoring lines sit.
+
+    metric_values: sequence of length lines.shape[0], one value per line,
+    in the same order as `lines`."""
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(image, cmap="gray", vmin=0, vmax=1)
+    values = torch.as_tensor(metric_values, dtype=torch.float32)
+    norm = plt.Normalize(vmin=values.min().item(), vmax=values.max().item())
+    cmap_obj = plt.get_cmap(cmap)
+    for i in range(lines.shape[0]):
+        line = lines[i]
+        color = cmap_obj(norm(values[i].item()))
+        ax.plot(line[:, 1], line[:, 0], color=color, linewidth=2.5)
+    ax.set_title(title or "Method B: reference lines colored by metric")
+    ax.axis("off")
+    sm = plt.cm.ScalarMappable(cmap=cmap_obj, norm=norm)
+    sm.set_array([])
+    fig.colorbar(sm, ax=ax, label=colorbar_label, fraction=0.046)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_ratio_distribution(ratio_adv, ratio_control, title: str = None, save_path=None):
+    """Histogram of adversarial vs. control ratio values for one distance
+    measure - shows whether it separates genuinely adversarial
+    perturbations from equally-sized random ones (bimodal, minimal
+    overlap = clear separation)."""
+    fig, ax = plt.subplots(figsize=(5.5, 3.5))
+    adv = ratio_adv.detach().cpu().numpy() if torch.is_tensor(ratio_adv) else ratio_adv
+    ctrl = ratio_control.detach().cpu().numpy() if torch.is_tensor(ratio_control) else ratio_control
+    ax.hist(adv, bins=20, alpha=0.6, label="adversarial (FGSM)", color="tab:red")
+    ax.hist(ctrl, bins=20, alpha=0.6, label="control (random noise)", color="tab:blue")
+    ax.set_xlabel("ratio")
+    ax.set_ylabel("count")
+    ax.set_title(title or "Ratio distribution: adversarial vs. control")
+    ax.legend()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_per_line_bar(values: dict, title: str = None, ylabel: str = "value",
+                       highlight_key=None, save_path=None):
+    """Generic labeled bar chart over a {label: value} dict - e.g. per-line
+    fold-ratios. `highlight_key`, if given, colors that one bar
+    differently (e.g. the single best-performing line)."""
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    labels = list(values.keys())
+    vals = list(values.values())
+    colors = ["tab:orange" if k == highlight_key else "tab:blue" for k in labels]
+    ax.bar(range(len(labels)), vals, color=colors)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels([str(k) for k in labels], rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title or "")
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
