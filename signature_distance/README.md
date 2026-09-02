@@ -214,7 +214,7 @@ additive alongside the merged pipeline, not a replacement for it.
 - **Method B's hyperparameter sweep changed the recommended default, not
   the underlying functions' own defaults.** `method_b_sweep.py` found 12h+4v
   lines at depth 2 beats the original 8h+8v/depth-4 split by a wide margin
-  (mean fold-ratio ~14.8-15x vs. ~8.4x) and adopted it as the new default for
+  (mean fold-ratio 15.00x, 1/72 exceptions, vs. ~8.4x) and adopted it as the new default for
   *new* work — but `make_reference_lines`'s own `counts=(8,8)` default and
   `signature_of_stream`'s depth parameter are unchanged, so every existing
   number in this README computed before the sweep (Phase 1-4, both
@@ -231,7 +231,12 @@ additive alongside the merged pipeline, not a replacement for it.
   B's swept winner by a consistent, non-trivial margin (9.88x vs. 13.53x
   mean fold-ratio, same 200-image/model/epsilon comparison) — kept as a
   documented alternative, not adopted as a replacement. Full detail:
-  `Method_C.md`.
+  `Method_C.md`. Note the 13.53x figure here differs from the 15.00x
+  figure above: this one is recomputed over all 16 of Method B's lines
+  (no border-line exclusion) specifically so the comparison uses the
+  same convention as Method C, which has none of its own to exclude —
+  see `Method_B.md`'s "Stage 8" section for the exact reconciliation
+  between the two Method B numbers.
 
 ## How to run it
 

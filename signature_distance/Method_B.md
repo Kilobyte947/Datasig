@@ -229,23 +229,50 @@ The top candidates from this screen were then validated with the full
 per-path adversarial evaluation (both models trained once and reused
 across every candidate, since training doesn't depend on Method B's
 configuration). The winning configuration (12 horizontal + 4 vertical
-lines, depth 2) reached a mean fold-ratio of roughly 14.8-15.0x against
-the original configuration's 8.4x — a substantial improvement, and one
-that agreed with the independent cheap screen rather than contradicting
-it. It was not perfectly exception-free at the individual-line level (one
-of 72 line/model/epsilon combinations showed the reverse direction,
-isolated to the larger model's smallest-sample condition, consistent with
-sample-size noise rather than a new pattern), and a second candidate
-(all-horizontal-plus-a-few-vertical variants aside, specifically the
-16-horizontal/0-vertical split at depth 2) was competitive rather than a
-distant runner-up — it actually outperformed the winner on the larger
-model specifically while losing on the smaller one, a genuinely mixed
-result on that comparison. A robustness check on the winning configuration
-(same method as above) found no lines behaving like the earlier scale
-confound; baseline distances across its 12 informative lines spanned a
-narrow range (about 1.4x top to bottom, compared to the earlier ~2x gap),
-and excluding its two smallest-distance lines moved the mean fold-ratio
-from 14.8x to 12.6x while the pattern remained intact.
+lines, depth 2) reached a mean fold-ratio of 15.00x against the original
+configuration's 8.4x — a substantial improvement, and one that agreed
+with the independent cheap screen rather than contradicting it. This
+figure restricts to the winning geometry's 12 informative lines (indices
+0, 11, 12, and 15 sit exactly on the image border and are excluded for
+the same near-zero-baseline-distance reason `per_path_adversarial_eval.py`
+excludes the analogous 4 border lines of the original 8h+8v geometry) -
+72 = 12 informative lines x 6 model/epsilon combinations (SmallCNN and
+StrongCNN, at each of 3 epsilons). It was not perfectly exception-free at
+the individual-line level (one of those 72 combinations showed the
+reverse direction, isolated to the larger model's smallest-sample
+condition, consistent with sample-size noise rather than a new pattern),
+and a second candidate (all-horizontal-plus-a-few-vertical variants
+aside, specifically the 16-horizontal/0-vertical split at depth 2) was
+competitive rather than a distant runner-up — it actually outperformed
+the winner on the larger model specifically while losing on the smaller
+one, a genuinely mixed result on that comparison. A robustness check on
+the winning configuration (same method as above) found no lines behaving
+like the earlier scale confound; baseline distances across its 12
+informative lines spanned a narrow range (about 1.4x top to bottom,
+compared to the earlier ~2x gap), and excluding its two smallest-distance
+lines moved the mean fold-ratio from roughly 14.8x to roughly 12.6x while
+the pattern remained intact - this specific follow-up check predates the
+notebook reaching its final, reproducible form, so its exact figures are
+reported here as approximate rather than re-verified against a specific
+executable cell.
+
+**A different, 13.53x figure for this same winning configuration appears
+elsewhere in this project** (Method_C.md, README.md, and
+`notebook_method_c.ipynb`, alongside 95/96 exceptions) - this is not a
+regression or a second, contradicting measurement of the number above.
+It is the SAME underlying Stage B run recomputed over all 16 lines
+(96 = 16 x 6 model/epsilon combinations) instead of the 12-line
+informative subset, done specifically so Method B's number is measured
+the same way as Method C's (which has no border-line exclusion, since
+Method C's own Stage A screen found no structurally degenerate segment)
+- an apples-to-apples comparison would otherwise be confounded by the two
+methods using different subset conventions. Both figures are correct for
+what they measure: **15.00x/72 is Method B's own headline number** (use
+this one when discussing Method B in isolation, since it excludes ratios
+this project already treats as numerically degenerate elsewhere);
+**13.53x/96 is specifically the number to quote when comparing Method B
+against Method C**, since it's the only one computed under a convention
+shared by both methods.
 
 Points-per-line showed the weakest effect of any axis in this sweep, which
 is the main signal it offers for choosing a comparable parameter — a

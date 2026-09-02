@@ -115,7 +115,15 @@ ratio, at depth 3.
 
 Both numbers above use all 16 lines/segments on each side (not a
 subset), on the same 200-image sample, same models, same epsilons — a
-direct, fair comparison.
+direct, fair comparison. Method B's own headline number, reported in
+`Method_B.md`, is a different, larger figure - 15.00x with 1 exception
+out of 72 comparisons - because that number restricts to Method B's 12
+informative lines (excluding its 4 border-adjacent ones), the convention
+used everywhere else Method B is discussed on its own. The 13.53x figure
+here is deliberately recomputed over all 16 lines specifically so Method
+B is measured the same way as Method C (which has no border-line
+exclusion of its own), not a second, contradicting measurement of the
+same quantity.
 
 **Method C does not beat Method B on the primary magnitude measure.**
 Method B's winning configuration separates genuinely adversarial pairs
