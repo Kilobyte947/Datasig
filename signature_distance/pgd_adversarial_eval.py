@@ -57,11 +57,13 @@ from signature_distance.streams import line_stream, make_reference_lines
 
 RESULTS_DIR = Path(__file__).parent / "results"
 
-# Method B's current winning configuration (Stage 8 sweep, Method_B.md) -
-# settled, not reswept here (out of scope for this task).
+# Method B's current winning configuration (Stage 8 sweep, see README.md's
+# "Method B: Reference-Line Signature Distance" section) - settled, not
+# reswept here (out of scope for this task).
 METHOD_B_WINNER_LINES = make_reference_lines(angles_deg=(0, 90), counts=(12, 4), points_per_line=32)
 METHOD_B_WINNER_DEPTH = 2
-# Method C's settled depth (Method_C.md).
+# Method C's settled depth (see README.md's "Method C: Hilbert-Curve
+# Signature Distance" section).
 METHOD_C_DEPTH = 3
 
 

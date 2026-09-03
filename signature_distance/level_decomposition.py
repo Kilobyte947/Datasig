@@ -1,6 +1,7 @@
 """Level-wise decomposition of Method A/B signature distances - a read-only
 diagnostic, additive alongside the existing Phase 3/4 pipeline (see
-`level_decomposition.md` for the full spec/rationale).
+README.md's "Level-wise decomposition diagnostic" section for the full
+spec/rationale).
 
 Answers one question: is the within- vs. cross-digit signal in Method A's
 (and Method B's) signature distance carried entirely by the level-1 terms,
@@ -127,8 +128,8 @@ def run_level_decomposition(n_per_class: int = 30, seed: int = 0,
     `run_experiment.sanity_check_demo` exactly (same pool, same stream/
     signature construction, same independently-derived rescale factor `r`
     applied before any masking) so the `all` variant's numbers are directly
-    comparable to the documented Phase 4 table - see Gate 2 in
-    `level_decomposition.md`.
+    comparable to the documented Phase 4 table - see the reproduction gate
+    described in README.md's "Level-wise decomposition diagnostic" section.
 
     `r` is derived once per method (never shared, never re-derived per
     level variant) - the variants below differ only in which levels survive

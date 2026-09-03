@@ -168,8 +168,9 @@ def test_pixel_order_seed_isolates_pixel_order_from_pool():
 
 def test_all_variant_reproduces_documented_phase4_numbers():
     # Gate 2 (hard stop): the `all` variant must match the documented Phase
-    # 4 table (README.md / level_decomposition.md) to floating-point
-    # tolerance, since it uses the exact same protocol as
+    # 4 table (README.md's "Results" / "Level-wise decomposition diagnostic"
+    # sections) to floating-point tolerance, since it uses the exact same
+    # protocol as
     # run_experiment.sanity_check_demo (same pool, same streams/signatures,
     # same independently-derived r, applied before masking). Documented
     # values are rounded, so compare to ~2 decimal places on the means and

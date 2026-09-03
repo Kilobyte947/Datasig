@@ -1,8 +1,8 @@
 """Distance functions over signature vectors (Phase 3) and the within/cross
--digit sanity check (Phase 4) - see PLAN.md. Shared by both methods; Method A
-and Method B are always kept as two separate distance functions, never
-combined into one metric (per PLAN.md's "two candidate distance functions,
-not one" note).
+-digit sanity check (Phase 4) - see README.md's "Implementation plan and
+design constraints" section. Shared by both methods; Method A and Method B
+are always kept as two separate distance functions, never combined into one
+metric (per README.md's "two candidate distance functions, not one" note).
 """
 
 import torch
@@ -78,7 +78,8 @@ def method_b_feature_vector(line_sigs: torch.Tensor) -> torch.Tensor:
     """Method B: concatenate the 16 independent per-line (rescaled)
     signatures into one feature vector per image. This is the first point
     the 16 lines combine - deferred until after the signature step, never
-    before (see Method_B.md's "no cross-line concatenation" rule).
+    before (see README.md's "Method B: Reference-Line Signature Distance"
+    section's "no cross-line concatenation" rule).
 
     line_sigs: (N, num_lines, sig_dim) -> (N, num_lines * sig_dim).
     """
@@ -110,7 +111,7 @@ def per_line_distances(sig1: torch.Tensor, sig2: torch.Tensor) -> torch.Tensor:
 
 
 def within_vs_cross_digit_distance(vectors: torch.Tensor, labels: torch.Tensor) -> dict:
-    """Cheap, label-based sanity check (PLAN.md Phase 4): mean pairwise
+    """Cheap, label-based sanity check (README.md Phase 4): mean pairwise
     Euclidean distance for same-digit pairs vs. different-digit pairs, over
     the given sample. No model needed - run before anything downstream
     (adversarial/Lipschitz evaluation, sweeps). A meaningful distance

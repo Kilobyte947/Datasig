@@ -1,7 +1,8 @@
 """Stream (path) construction from MNIST images, for later signature computation.
 
-Two independent methods for turning a 28x28 image into a path (see PLAN.md /
-Method_B.md for the full design rationale):
+Two independent methods for turning a 28x28 image into a path (see
+README.md's "Implementation plan and design constraints" and "Method B:
+Reference-Line Signature Distance" sections for the full design rationale):
   - Method A (`make_pixel_order` + `patch_sv_stream`): a time-augmented stream
     of the largest singular value of 3x3 patches, visited in a fixed shared
     pixel order.
@@ -9,7 +10,7 @@ Method_B.md for the full design rationale):
     horizontal/vertical reference lines through the image, each sampled into
     a time-augmented [t, intensity] stream via bilinear interpolation.
 
-No signature computation happens in this module - see `PLAN.md`.
+No signature computation happens in this module - see `README.md`.
 """
 
 import torch
@@ -136,7 +137,8 @@ def line_stream(images: torch.Tensor, lines: torch.Tensor) -> torch.Tensor:
              interpolation (`grid_sample`, no Python loop over images);
              t = time_channel(points_per_line), identical for every line and
              every image. Lines stay separate in this output - see
-             Method_B.md's "no cross-line concatenation" note.
+             README.md's "Method B: Reference-Line Signature Distance"
+             section's "no cross-line concatenation" note.
     """
     n, h, w = images.shape
     num_lines, points_per_line, _ = lines.shape

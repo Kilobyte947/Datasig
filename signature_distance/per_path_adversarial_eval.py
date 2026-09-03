@@ -14,7 +14,8 @@ The robustness check at the bottom of this file (`fold_ratio_robustness`,
 `run_robustness_report`) was originally a separate, read-only module kept
 apart deliberately so it was visually obvious nothing in this file's own
 evaluation logic was being touched while it was being checked; now that
-that history is recorded in Method_B.md, it lives here as an additional
+that history is recorded in README.md's "Method B: Reference-Line Signature
+Distance" section, it lives here as an additional
 function instead of a separate file - still read-only over an
 already-computed `run_per_path_adversarial_eval` result, still no new
 signature computation.

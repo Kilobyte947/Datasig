@@ -167,7 +167,7 @@ INTERPOLATION_VARIANTS = ("linear", "cubic")
 
 
 def run_stage_a_sweep(n_per_class: int = 15, seed: int = 0, verbose: bool = True) -> list:
-    """Full joint sweep (per PLAN.md's Stage 8 note: "sweep together, not
+    """Full joint sweep (per README.md's Stage 8 note: "sweep together, not
     staged one-at-a-time") over geometry x points x depth x interpolation.
     Depth is handled cheaply via the max-depth-then-slice shortcut above,
     so the actual expensive-computation grid is geometry x points x

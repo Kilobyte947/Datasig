@@ -50,7 +50,8 @@ def stream_construction_demo(n_digits: int = 3, seed: int = 0) -> dict:
 
         stream = line_stream(image.unsqueeze(0), lines)[0]  # (16, 32, 2)
         # One signature per line, kept separate (no cross-line concatenation
-        # before the signature step - see Method_B.md).
+        # before the signature step - see README.md's "Method B:
+        # Reference-Line Signature Distance" section).
         sig = signature_of_stream(stream, depth=SIGNATURE_DEPTH)  # (16, sig_dim)
 
         figures[f"digit{digit}_overlay"] = plots.plot_reference_lines(
@@ -107,7 +108,7 @@ def method_a_demo(n_digits: int = 3, seed: int = 0) -> dict:
 
 
 def sanity_check_demo(n_per_class: int = 30, seed: int = 0, depth: int = SIGNATURE_DEPTH) -> dict:
-    """PLAN.md Phase 4: within-digit vs. cross-digit mean distance, for
+    """README.md Phase 4: within-digit vs. cross-digit mean distance, for
     both methods independently, on a modest sample (default 300 images,
     30/class). Order of operations, per plan: rescale each method's raw
     signatures (r chosen empirically per method via

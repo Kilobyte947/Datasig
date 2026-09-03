@@ -1,6 +1,7 @@
 """Truncated signature computation, shared by both methods' 2D
 `[t, value]` streams (Method A's `patch_sv_stream`, Method B's
-`line_stream`) - see PLAN.md Phase 2.
+`line_stream`) - see README.md's "Implementation plan and design
+constraints" section, Phase 2.
 
 Built on roughpy_jax's low-level, JAX-native primitives (`Lie`, `cbh`,
 `to_signature`) rather than its higher-level `Stream` object wrappers
@@ -12,7 +13,7 @@ L-shaped path's hand-computed area term) rather than inferred from sparse
 docs on the Stream classes.
 
 Each stream is piecewise-linear by construction (straight-line interpolation
-between consecutive sampled points, per PLAN.md's Method A/B design). For a
+between consecutive sampled points, per README.md's Method A/B design). For a
 single straight segment, the log-signature at any truncation depth is
 *exactly* its degree-1 displacement vector (a straight line has no
 higher-order/area terms) - so each increment is a pure "abelian" Lie element,
