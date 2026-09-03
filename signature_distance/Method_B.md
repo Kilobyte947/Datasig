@@ -256,6 +256,25 @@ notebook reaching its final, reproducible form, so its exact figures are
 reported here as approximate rather than re-verified against a specific
 executable cell.
 
+**Worth stating explicitly rather than leaving implicit: the scale
+confound described earlier (the two lines behind
+`per_path_adversarial_eval.EXCLUDED_LINES = (9, 14)` in code) was
+identified on the *original* 8h+8v geometry's own line numbering (8
+horizontal lines at indices 0-7, then 8 vertical at indices 8-15). The
+winning 12h+4v geometry is built completely differently (12 horizontal
+lines at indices 0-11, then 4 vertical at indices 12-15), so index
+numbers 9 and 14 in the winner's own numbering point to entirely
+different, unrelated lines - checked directly rather than assumed: line
+9 is an interior horizontal line (row 22.1), line 14 is an interior
+vertical line (col 18.0), and both are part of the winner's 12-line
+informative set above (only indices 0, 11, 12, and 15 are excluded from
+it). The "two smallest-distance lines" excluded in the winner's own
+robustness check just above is an independently-identified pair specific
+to this geometry, found by its own check on its own data - not a
+reapplication of the original confound's indices 9/14, and the two pairs
+should not be assumed to be the same lines just because both checks
+describe excluding two.
+
 **A different, 13.53x figure for this same winning configuration appears
 elsewhere in this project** (Method_C.md, README.md, and
 `notebook_method_c.ipynb`, alongside 95/96 exceptions) - this is not a
