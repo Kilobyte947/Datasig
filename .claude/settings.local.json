@@ -91,7 +91,24 @@
       "Bash(jupyter nbconvert *)",
       "Bash(python3 -c \"import nbclient; print\\(nbclient.__version__\\)\")",
       "Bash(python3 -c \"import nbformat; print\\(nbformat.__version__\\)\")",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "Bash(git rm *)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/ --collect-only -q)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_level_decomposition.py -v -x -k \"not reproduces and not closed_form_on_real_batch and not structure\")",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_level_decomposition.py -v -k \"structure or closed_form_on_real_batch\")",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_level_decomposition.py -v)",
+      "Bash(.venv/bin/python \"/private/tmp/claude-501/-Users-yichaowang-Documents-Part-A-Datasig-project-code/1579c1e7-55e1-4cdc-b006-c0a2523b91f2/scratchpad/compare_pixel_orders.py\")",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_method_a_adversarial_eval.py -v)",
+      "Bash(jobs)",
+      "Bash(git count-objects *)",
+      "Bash(.venv/bin/python -m pytest toy_lipschitz/tests mnist_lipschitz/tests mnist_lipschitz/adversarial/tests signature_distance/tests -q)",
+      "Bash(.venv/bin/python -c \"import umap\")",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_signatures.py -q)",
+      "Bash(.venv/bin/python -m pytest toy_lipschitz/tests/test_tier_a_closed_form.py signature_distance/tests/test_signatures.py -q)",
+      "Bash(.venv/bin/python -m pytest signature_distance/tests/test_signatures.py toy_lipschitz/tests/test_tier_a_closed_form.py -q)",
+      "Bash(.venv/bin/python -m pytest toy_lipschitz/tests -q)",
+      "Bash(.venv/bin/python -m pytest mnist_lipschitz/tests mnist_lipschitz/adversarial/tests -q)",
+      "Bash(awk '/test_margin_fn_matches_manual_computation/,/^_{5,}|^====/' /tmp/baseline_full_run.log)"
     ]
   }
 }
