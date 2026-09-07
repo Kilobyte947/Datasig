@@ -29,8 +29,9 @@ class TinyMLP(nn.Module):
 
 
 class SingleTanhUnit(nn.Module):
-    """"A model that's architecturally forced to have exact shape as the Tier A's ground truth : f(x) = A * tanh(w^T x + b), A/w/b as learnable params. 
-    Used only for tier A sanity check."""""
+    """A model architecturally forced to match Tier A's ground truth exactly:
+    f(x) = A * tanh(w^T x + b), with A/w/b as learnable parameters. Used
+    only for the Tier A sanity check."""
 
     def __init__(self, input_dim):
         super().__init__()
@@ -43,37 +44,24 @@ class SingleTanhUnit(nn.Module):
         return self.A * torch.tanh(z)
 
 
-def train_regressor(model, x_train, y_train, epochs, lr, weight_decay=0.0, batch_size=None, seed=None):
-    """ Plain gradient descent training (Adam optimizer, mean-squared-error loss).
-    Note: `seed` argument only controls the randomness during training (e.g. shuffling for mini-batches) and not how model's weights are randomly initialized."""
+def train_regressor(model, x_train, y_train, epochs, lr, weight_decay=0.0, seed=None):
+    """Full-batch gradient descent (Adam optimizer, mean-squared-error loss).
+    `seed`, if given, only seeds training randomness (there is none, since
+    training is full-batch and deterministic) - it does not control weight
+    initialization. Callers that want a reproducible model must call
+    torch.manual_seed(seed) before constructing it."""
     if seed is not None:
         torch.manual_seed(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
-    N = x_train.shape[0]
     loss_history = []
 
     for _ in range(epochs):
-        if batch_size is None or batch_size >= N:
-            optimizer.zero_grad()
-            pred = model(x_train)
-            loss = loss_fn(pred, y_train)
-            loss.backward()
-            optimizer.step()
-            loss_history.append(loss.item())
-        else:
-            perm = torch.randperm(N)
-            epoch_loss = 0.0
-            n_batches = 0
-            for start in range(0, N, batch_size):
-                idx = perm[start:start + batch_size]
-                optimizer.zero_grad()
-                pred = model(x_train[idx])
-                loss = loss_fn(pred, y_train[idx])
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-                n_batches += 1
-            loss_history.append(epoch_loss / n_batches)
+        optimizer.zero_grad()
+        pred = model(x_train)
+        loss = loss_fn(pred, y_train)
+        loss.backward()
+        optimizer.step()
+        loss_history.append(loss.item())
 
     return model, loss_history

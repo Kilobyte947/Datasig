@@ -32,9 +32,10 @@ def tier_a_grad(x, w, b, A):
 
 def tier_a_true_L(w, A, norm="l2"):
     """Return A * ||w||_2 (or ||w||_1 for norm='l1').
-    Note: the norm='l1' case is A * ||w||_1 as a simplified (non-dual) convention, not the true L1-distance dual norm A * ||w||_inf. 
-    All correctness checkpoints in this project use norm='l2', where the
-    dual-norm identity holds exactly (Cauchy-Schwarz).
+    The norm='l1' case returns A * ||w||_1, a simplified (non-dual) convention,
+    not the true L1-distance dual norm A * ||w||_inf. Every test in this
+    project uses norm='l2', where the dual-norm identity holds exactly
+    (Cauchy-Schwarz).
     """
     w = _as_tensor(w)
     if norm == "l2":
@@ -129,8 +130,6 @@ def tier_b_true_L(components, domain, norm="l2", grid_points=200000, n_restarts=
 
     return best_L, best_x
 
-#Adding a new function - piecewise funtion which is nto smooth S shape but a piecewise
-
 def piecewise_ramp_f(x, c, half_width, slope):
     """A single 1D piecewise-linear ramp: flat at 0, then rises linearly with `slope` over [c - half_width, c + half_width], then flat at slope * (2*half_width). 
     Closed-form Lipschitz constant is exactly |slope| -- the piecewise-linear analogue of tier_a_f's single tanh ridge, used to test model recovery when f*'s functional form is
@@ -145,24 +144,3 @@ def piecewise_ramp_f(x, c, half_width, slope):
 def piecewise_ramp_true_L(slope):
     # Closed-form: the Lipschitz constant of a single ramp is exactly |slope|, attained everywhere inside the ramp region.
     return abs(slope)
-
-def piecewise_sum_f(x, components):
-    # f*(x) = sum of ramps. components: list of dicts {"c":..., "half_width":..., "slope":...}.
-    total = None
-    for comp in components:
-        y = piecewise_ramp_f(x, comp["c"], comp["half_width"], comp["slope"])
-        total = y if total is None else total + y
-    return total
-
-def piecewise_sum_true_L(components):
-    """Exact true Lipschitz constant of a sum of ramps -- unlike tier_b_true_L (sum of tanh ridges, no closed form, needs grid search +
-    LBFGS), a sum of piecewise-linear ramps has a piecewise-constant derivative. 
-    The true global L* is exactly the largest absolute slope across the finitely many intervals between breakpoints -- no numerical search required.
-    """
-    breakpoints = sorted({comp["c"] - comp["half_width"] for comp in components} | {comp["c"] + comp["half_width"] for comp in components})
-    best_L = 0.0
-    for i in range(len(breakpoints) - 1):
-        mid = (breakpoints[i] + breakpoints[i + 1]) / 2
-        slope_here = sum(comp["slope"] for comp in components if comp["c"] - comp["half_width"] <= mid <= comp["c"] + comp["half_width"])
-        best_L = max(best_L, abs(slope_here))
-    return best_L

@@ -6,7 +6,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from toy_lipschitz.run_experiment import build_tier_b_1d, sweep_over_N, sweep_over_N_seed_averaged, DOMAIN, SEED
+from toy_example.run_experiment import build_tier_b_1d, sweep_over_N, sweep_over_N_seed_averaged, DOMAIN, SEED
 
 # Small/fast settings throughout -- these tests check the seed-averaging
 # machinery's shapes and its equivalence to sweep_over_N at n_seeds=1, not

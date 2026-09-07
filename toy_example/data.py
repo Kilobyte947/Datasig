@@ -60,7 +60,8 @@ def sample_with_gap(N, domain, d, gap_center, gap_radius, gap_fraction, seed=Non
     """Deliberately starve a region of training data. Picks a ball of `gap_radius` around `gap_center` 
     (usually f*'s steepest point, since that's where starving data should hurt most) 
     and samples so only `gap_fraction` of the N points land inside it, the rest scattered uniformly outside. 
-    Implemented via rejection sampling - draw a random point, keep it if it's on the correct side (inside/outside the ball) for what's still needed, discard and retry otherwise. 
+    Implemented via rejection sampling - draw a random point, keep it if it's on the correct side (inside/outside the ball) 
+    for what's still needed, discard and retry otherwise. 
     """   
     generator = _generator(seed)
     n_gap = int(round(N * gap_fraction))

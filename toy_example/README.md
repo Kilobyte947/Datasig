@@ -1,4 +1,4 @@
-# toy_lipschitz
+# toy_example
 
 A toy 1D/2D regression testbed for studying how well the Lipschitz constant
 of a function can be recovered — from raw data alone, and from a model
@@ -27,10 +27,10 @@ capacity:
 
 A second, independent question is whether the *distance metric* used
 inside these estimates matters: all of them default to plain Euclidean
-distance between input points, but that's a modeling choice, not a law.
-Both `pairwise_lipschitz` and `local_perturbation_lipschitz` accept an
-optional Mahalanobis distance instead, derived from a polynomial embedding
-of the data (see [Distance metric: Euclidean vs. Mahalanobis](#distance-metric-euclidean-vs-mahalanobis)).
+distance between input points, though nothing about the estimator forces
+that choice. Both `pairwise_lipschitz` and `local_perturbation_lipschitz`
+accept an optional Mahalanobis distance instead, derived from a polynomial
+embedding of the data (see [Distance metric: Euclidean vs. Mahalanobis](#distance-metric-euclidean-vs-mahalanobis)).
 
 ## How it's designed
 
@@ -45,10 +45,10 @@ estimate:
   decision boundary). `tier_b_true_L` locates the steepest point via a
   dense grid search refined by gradient ascent (`torch.optim.LBFGS`) from
   multiple random restarts, returning `(L_star, x_star)`.
-- A **piecewise-linear** ground truth (`piecewise_ramp_f`/`piecewise_sum_f`)
-  is also defined, whose Lipschitz constant is exactly the largest ramp
-  slope — no numerical search needed. It exists to test whether matching
-  a model's activation function to `f*`'s functional form (smooth tanh vs.
+- A **piecewise-linear** ground truth (`piecewise_ramp_f`) is also
+  defined, whose Lipschitz constant is exactly the largest ramp slope —
+  no numerical search needed. It exists to test whether matching a
+  model's activation function to `f*`'s functional form (smooth tanh vs.
   piecewise-linear ReLU) affects how well `L*` is recovered
   (`run_cross_architecture_check`).
 
@@ -109,16 +109,52 @@ between raw input points. `embeddings.py` provides an alternative:
    arguments. Leave both unset and behavior is exactly plain Euclidean;
    supply both and distance is computed in the embedded space instead.
 
+On the Tier A gap-sampled dataset (single ridge, `L*=6.0` exactly), using
+the same raw data and the same trained model throughout, only the
+distance metric changes:
+
+| distance | global `L_hat_data` | error vs `L*` |
+|---|---|---|
+| plain Euclidean | 4.87 | 19% |
+| Mahalanobis (degree-3 polynomial embedding) | 6.01 | <1% |
+
 `augmented_embedding` additionally supports appending `f(x)` itself as an
-embedding feature, but no driver currently uses it: measuring a
-function's Lipschitz behavior with a metric built from that same
-function's own output turns out to be self-cancelling (checked directly —
-see [Design decisions](#design-decisions)). It's kept available for a
-setting where the embedded function differs from the one being measured.
+embedding feature, so the metric is aware of the function's own shape —
+but no driver currently uses it: measuring a function's Lipschitz
+behavior with a metric built from that same function's own output is
+self-cancelling. The resulting distance ends up scaled by almost exactly
+the quantity being measured, so the ratio collapses toward a
+near-constant value everywhere; with `f(x)` included, the gap-vs-uniform
+local-Lipschitz contrast that plain Euclidean distance shows clearly
+(roughly 6x higher inside the undersampled region) drops to roughly 1x —
+the flattening effect this experiment exists to detect becomes invisible.
+`augmented_embedding` remains available for a setting where the embedded
+function differs from the one being measured.
 
 The embedding is currently 1D only (`polynomial_embedding` doesn't
 support `d=2`); extending it to the Tier B 2D dataset would need a 2D
 polynomial feature map.
+
+**Choosing the embedding degree.** The polynomial degree is a free
+parameter with a real effect on both accuracy and numerical stability:
+too low, and the embedding has too little structure to capture the
+effect; too high, and the embedded covariance becomes ill-conditioned
+(polynomial powers are highly collinear on a bounded domain), making the
+metric numerically unreliable even though it still inverts.
+`sweep_polynomial_degree` checks both together:
+
+| degree | rel. error vs `L*` | cond(covariance) |
+|---|---|---|
+| 1 | 137% | 1 |
+| 2 | 133% | 6 |
+| 3 | **0.08%** | 1.5e3 |
+| 4 | 1.2% | 2.0e4 |
+| 5 | 44% | 2.0e6 |
+| 6 | 45% | 3.4e7 |
+
+Degree 3 is the clear choice — lowest error, and still well within a
+reasonable condition number. Degrees 1-2 are too simple to capture the
+effect at all; degrees 5-6 are numerically fragile.
 
 ## File reference
 
@@ -129,18 +165,19 @@ polynomial feature map.
 | `estimators.py` | The three Lipschitz estimators (`pairwise_lipschitz`, `local_perturbation_lipschitz`, `gradient_norm_estimate`) plus their grid-evaluating variants. `pairwise_lipschitz` and `local_perturbation_lipschitz` accept the optional `embed_fn`/`precision` pair for Mahalanobis distance. |
 | `embeddings.py` | `polynomial_embedding`, `augmented_embedding`, `empirical_covariance`, `precision_from_covariance`, and `_mahalanobis_dist` — the full pipeline for deriving and applying a Mahalanobis distance from an embedded feature space. |
 | `models.py` | `TinyMLP`, `SingleTanhUnit`, and `train_regressor` (plain MSE/Adam training loop). |
-| `plots.py` | All plotting logic: `plot_gap_vs_uniform`, `plot_sweep`, `plot_2d_heatmaps`, `plot_local_vs_global_lipschitz`, `plot_degree_sweep`, `plot_coverage_heatmap`, `plot_seed_averaged_sweep`. |
+| `plots.py` | All plotting logic: `plot_gap_vs_uniform`, `plot_sweep`, `plot_2d_heatmaps`, `plot_local_vs_global_lipschitz`, `plot_degree_sweep`, `plot_coverage_heatmap`, `plot_seed_averaged_sweep`, and the presentation-figure variants (`plot_presentation_gap_effect`, `plot_presentation_metric_comparison`, `plot_presentation_degree_tradeoff`). |
 | `run_experiment.py` | Driver wiring everything together — see [How to run it](#how-to-run-it) for the full list of entry points. Saves figures and `.npz` result arrays to `results/`. |
-| `new_distance_measure.md` | Standalone write-up of the Mahalanobis-in-polynomial-embedding extension and the 2D coverage-density finding, with the full result tables. |
 | `tests/test_tier_a_closed_form.py` | Checks the hand-derived analytic gradient against `torch.autograd.grad`. |
+| `tests/test_tier_b_closed_form.py` | Same check for Tier B's gradient (sum of ridges). |
+| `tests/test_piecewise_closed_form.py` | Checks the piecewise-linear ground truth's slope and closed-form `L*`. |
 | `tests/test_estimators.py` | Checks `pairwise_lipschitz` converges toward `tier_a_true_L` as `N` grows, `gradient_norm_estimate` matches it at the true argmax, and the Mahalanobis path is correct (reduces to a closed-form scaled-Euclidean identity under a degree-1 embedding; `local_perturbation_lipschitz` under an embedding converges to its analytic pointwise value as the perturbation radius shrinks). |
 | `tests/test_seed_averaged_sweep.py` | Checks `sweep_over_N_seed_averaged` returns correctly-shaped per-seed and aggregated arrays, and that `n_seeds=1` reproduces `sweep_over_N`'s own single-seed output exactly. |
-| `notebook_toy_lipschitz.ipynb` | Thin driver notebook — imports from this package and displays the figures produced by `run_experiment.py`. Contains no reusable logic of its own; see [Notebook contents](#notebook-contents). |
+| `notebook_toy_example.ipynb` | Thin driver notebook — imports from this package and displays the figures produced by `run_experiment.py`. Contains no reusable logic of its own; see [Notebook contents](#notebook-contents). |
 | `results/` | Generated outputs (git-ignored except `.gitkeep`): plots and `.npz` result arrays from every experiment below. |
 
 ## Notebook contents
 
-`notebook_toy_lipschitz.ipynb` runs, in order:
+`notebook_toy_example.ipynb` runs, in order:
 
 1. **Tier A sanity check** (`run_tier_a_sanity`) — the whole pipeline
    validated against a closed-form answer.
@@ -176,24 +213,24 @@ the notebook.
 - **float64 everywhere** — every module calls `torch.set_default_dtype(torch.float64)` at import time, so true-vs-estimate comparisons aren't contaminated by float32 noise near the true maximum.
 - **`domain` is a single `(low, high)` tuple** applied isotropically to every dimension (e.g. `(-5.0, 5.0)` for both `d=1` and `d=2`), not a per-axis list.
 - **No `scipy` dependency** — Tier B's gradient-ascent refinement of `L*` uses `torch.optim.LBFGS` instead of `scipy.optimize.minimize`, since the ground-truth gradient (`tier_b_grad`) is itself a plain differentiable torch expression.
-- **`tier_a_true_L(norm='l1')` is a documented simplification** — it returns `A * ||w||_1`, not the true L1-distance dual norm `A * ||w||_inf`. All correctness checkpoints use `norm='l2'`, where the dual-norm identity holds exactly, so this doesn't affect any test.
+- **`tier_a_true_L(norm='l1')` is a documented simplification** — it returns `A * ||w||_1`, not the true L1-distance dual norm `A * ||w||_inf`. Every test uses `norm='l2'`, where the dual-norm identity holds exactly, so this doesn't affect any test.
 - **Gap sampling is rejection-based**, not analytic — cheap and exact enough at `d=1`/`d=2`.
 - **Seeding covers weight initialization, not just training.** `train_regressor`'s `seed` argument only controls randomness inside that function (there is none — full-batch gradient descent is deterministic). Every call site that trains a model seeds `torch.manual_seed(seed)` immediately *before* constructing the model, so a fixed seed actually controls initialization too.
 - **`make_dataset` is always noiseless** (`y = f_star(x)` exactly) — noise, if needed, belongs in the definition of `f_star` itself, not as a stochastic perturbation on a fixed function's output.
-- **The polynomial embedding never includes `f(x)`** — `augmented_embedding` supports it, but using it to measure the Lipschitz behavior of the same function it's built from is self-cancelling: checked directly, it collapses the gap-vs-uniform local-Lipschitz contrast from roughly 6x down to roughly 1x, erasing the effect this whole project exists to detect. Full explanation in `new_distance_measure.md`.
-- **Embedding degree 3 was chosen by measuring, not guessing** — `sweep_polynomial_degree` checks both accuracy against `L*` and the condition number of the fitted covariance, since a higher degree can look more accurate on one dataset while being numerically fragile. Degree 3 is the lowest degree that is both accurate (~0.08% error) and well-conditioned (`cond ≈ 1.5e3`); degrees 5-6 have more raw features but blow past `1e6` condition number and lose accuracy along with it.
+- **The polynomial embedding never includes `f(x)`** — see [Distance metric: Euclidean vs. Mahalanobis](#distance-metric-euclidean-vs-mahalanobis) above for why.
+- **Embedding degree 3 was chosen by measuring, not guessing** — `sweep_polynomial_degree` checks both accuracy against `L*` and the condition number of the fitted covariance, since a higher degree can look more accurate on one dataset while being numerically fragile. See the table above.
 - **`sweep_over_N` takes an optional `seed`, defaulting to the module-level `SEED`** — purely additive: neither the uniform nor the gap N-sweep inside `run_sweeps()` passes `seed=`, so both are unaffected. This is what lets `sweep_over_N_seed_averaged` repeat the exact same procedure at different seeds by calling `sweep_over_N` directly rather than duplicating its logic.
 
 ## How to run it
 
 ```bash
 # from the repo root
-.venv/bin/python -m pytest toy_lipschitz/tests/ -v
+.venv/bin/python -m pytest toy_example/tests/ -v
 
-.venv/bin/python -c "from toy_lipschitz.run_experiment import main; main()"
+.venv/bin/python -c "from toy_example.run_experiment import main; main()"
 
 # or execute the notebook end-to-end
-.venv/bin/jupyter nbconvert --to notebook --execute --inplace toy_lipschitz/notebook_toy_lipschitz.ipynb
+.venv/bin/jupyter nbconvert --to notebook --execute --inplace toy_example/notebook_toy_example.ipynb
 ```
 
 `run_experiment.main()` runs, in order: `run_tier_a_sanity()` (asserts
@@ -206,7 +243,7 @@ The seed-averaged gap N-sweep is opt-in and not part of `main()` — it's
 several times slower than a single-seed sweep — so run it directly:
 
 ```bash
-.venv/bin/python -c "from toy_lipschitz.run_experiment import run_gap_N_sweep_seed_averaged; run_gap_N_sweep_seed_averaged(n_seeds=5)"
+.venv/bin/python -c "from toy_example.run_experiment import run_gap_N_sweep_seed_averaged; run_gap_N_sweep_seed_averaged(n_seeds=5)"
 ```
 
 ## Results
@@ -260,19 +297,16 @@ several times slower than a single-seed sweep — so run it directly:
   isn't established here; one untested hypothesis is that a 2D gap can be
   approached from more directions than a 1D one, giving a smooth model
   more surrounding signal to interpolate the peak from.
-- **Distance metric matters** (`run_metric_embedding_check`, `L*=6.0`):
-  on identical raw data, `L_hat_data` computed with plain Euclidean
-  distance is `~4.87` (19% under `L*`); the same data under a Mahalanobis
-  distance in a degree-3 polynomial embedding gives `~6.01` (<1% off).
-  `results/tier_a_local_vs_global_lipschitz.png` shows this holds at the
-  local (per-point), not just global, level.
-- **Degree selection isn't free** (`sweep_polynomial_degree`,
-  `results/degree_sweep.png`): degrees 1-2 are too simple to capture the
-  effect at all (>130% error); degree 3 is the sweet spot (`0.08%` error,
-  `cond(cov) ≈ 1.5e3`); degrees 5-6 have more raw features but the
-  covariance's condition number blows past `1e6` and accuracy collapses
-  with it — more parameters here buys overfitting to sampling noise, not
-  a better metric.
+- **Distance metric matters** and **degree selection isn't free** — see
+  the [Distance metric: Euclidean vs. Mahalanobis](#distance-metric-euclidean-vs-mahalanobis)
+  section above for both result tables.
 
-See `new_distance_measure.md` for the full write-up and result tables
-behind the last two points.
+## Presentation figures
+
+Three additional `plots.py` functions produce slide-ready versions of the
+three headline results above, on a single axis each with the key numbers
+labeled directly (`results/presentation_*.png`): `plot_presentation_gap_effect`
+(the gap-vs-uniform flattening effect), `plot_presentation_metric_comparison`
+(plain vs. Mahalanobis error), and `plot_presentation_degree_tradeoff`
+(accuracy vs. conditioning across embedding degree, as two side-by-side
+panels rather than a dual-axis plot).

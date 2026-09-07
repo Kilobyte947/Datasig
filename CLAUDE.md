@@ -9,7 +9,7 @@ Lipschitz constant of a function can be recovered from data alone vs. from a tra
 and how much the choice of distance metric (Euclidean vs. Mahalanobis) affects that recovery.
 It's organized as a sequence of experiments, each in its own top-level package:
 
-- **`toy_lipschitz/`** — Experiment 1. A 1D/2D regression testbed with a closed-form or
+- **`toy_example/`** — Experiment 1. A 1D/2D regression testbed with a closed-form or
   numerically-refined ground-truth Lipschitz constant `L*`, used to validate the estimation
   methodology itself before applying it to real models.
 - **`mnist_lipschitz/`** — Experiment 2. Scales the same three estimators to real classifiers
@@ -18,7 +18,7 @@ It's organized as a sequence of experiments, each in its own top-level package:
 - `cnn_mnist.ipynb`, `logistic_regression_mnist.ipynb`, `mlp_mnist.ipynb` — standalone top-level
   notebooks, precursors to `mnist_lipschitz/`.
 
-Each experiment package has its own detailed `README.md` (`toy_lipschitz/README.md`,
+Each experiment package has its own detailed `README.md` (`toy_example/README.md`,
 `mnist_lipschitz/README.md`) — **read the relevant one before making non-trivial changes**; they
 document the exact rationale behind non-obvious design choices (numerical conventions, why a
 particular regularization/algorithm was chosen over an alternative, what's still open/unresolved).
@@ -32,7 +32,7 @@ through it rather than a bare `python`/`pytest`:
 
 ```bash
 # run all tests for one experiment
-.venv/bin/python -m pytest toy_lipschitz/tests/ -v
+.venv/bin/python -m pytest toy_example/tests/ -v
 .venv/bin/python -m pytest mnist_lipschitz/tests/ -v
 
 # run a single test file / test
@@ -43,7 +43,7 @@ through it rather than a bare `python`/`pytest`:
 .venv/bin/python -m pytest mnist_lipschitz/adversarial/tests/ -v
 
 # run the full experiment driver
-.venv/bin/python -c "from toy_lipschitz.run_experiment import main; main()"
+.venv/bin/python -c "from toy_example.run_experiment import main; main()"
 .venv/bin/python -c "from mnist_lipschitz.run_experiment import main; main()"
 
 # execute a notebook end-to-end (regenerates results/ and plots in place)
@@ -57,7 +57,7 @@ that import from the package and display saved figures — no reusable logic bel
 ## Shared architecture across experiments
 
 Both packages follow the same module split, and `mnist_lipschitz` is a direct generalization of
-`toy_lipschitz`'s estimator code (same function names, extended to take an `output_fn`/`y_batch`
+`toy_example`'s estimator code (same function names, extended to take an `output_fn`/`y_batch`
 and a pluggable `distance_fn`):
 
 - **`estimators.py`** — the actual Lipschitz-estimation logic, independent per package but
@@ -74,7 +74,7 @@ and a pluggable `distance_fn`):
   machinery (`svd_ridge_precision`, `mahalanobis_distance`, `make_mahalanobis_distance_fn`,
   `covariance_eigenvalues`, `sweep_epsilon`), all built from the SVD of the raw pixel matrix so
   nothing here ever forms the `(784, 784)` covariance explicitly (forming `X^T @ X` squares the
-  condition number before regularization is applied). `toy_lipschitz` keeps the equivalent
+  condition number before regularization is applied). `toy_example` keeps the equivalent
   Mahalanobis logic inside `embeddings.py` instead of a separate file.
 - **`embeddings.py`** — feature-space embeddings (`elementwise_embedding`, and in
   `mnist_lipschitz`, also `local_patch_cross_terms`) used to fit the Mahalanobis metric over a
@@ -126,7 +126,7 @@ Both experiments follow a strict rule: **an estimator or numerical convention is
 downstream until it has been checked against an independent closed-form or analytic identity**.
 Concretely:
 
-- `toy_lipschitz/tests/test_tier_a_closed_form.py` checks the hand-derived analytic gradient
+- `toy_example/tests/test_tier_a_closed_form.py` checks the hand-derived analytic gradient
   against `torch.autograd.grad` before anything else is trusted.
 - `mnist_lipschitz/tests/test_estimators.py` is the critical checkpoint for that package: on a
   2-class logistic regression model, `margin_fn` reduces to an exactly linear function with a
@@ -150,7 +150,7 @@ first.
 
 ## Conventions worth knowing before editing
 
-- **`toy_lipschitz` uses `torch.float64` everywhere** (`torch.set_default_dtype(torch.float64)` at
+- **`toy_example` uses `torch.float64` everywhere** (`torch.set_default_dtype(torch.float64)` at
   import time in every module) so true-vs-estimate comparisons aren't contaminated by float32
   noise. `mnist_lipschitz` does not follow this (no closed-form ground truth to protect at that
   precision).
@@ -172,9 +172,9 @@ first.
 - **The three sub-methods (pairwise, local-perturbation, gradient-norm) are never merged into a
   single "local estimate."** They're kept separate and separately labeled throughout, including
   in plots — their disagreement is itself a finding, not noise to average away.
-- Datasets in `toy_lipschitz` are always noiseless (`y = f_star(x)` exactly); if noise is ever
+- Datasets in `toy_example` are always noiseless (`y = f_star(x)` exactly); if noise is ever
   needed it belongs in the definition of `f_star`, not as a stochastic wrapper.
 - New driver functions added to `run_experiment.py` are not automatically added to `main()` —
-  several (e.g. `run_gap_N_sweep_seed_averaged` in `toy_lipschitz`) are deliberately kept opt-in
+  several (e.g. `run_gap_N_sweep_seed_averaged` in `toy_example`) are deliberately kept opt-in
   because they're multiples slower than the standard run. Check each README's "How to run it" /
   "Status" section before assuming a function is part of the default pipeline.

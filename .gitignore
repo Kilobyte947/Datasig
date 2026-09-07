@@ -5,8 +5,8 @@ __pycache__/
 .DS_Store
 .venv/
 
-toy_lipschitz/results/*
-!toy_lipschitz/results/.gitkeep
+toy_example/results/*
+!toy_example/results/.gitkeep
 
 mnist_lipschitz/results/*
 !mnist_lipschitz/results/.gitkeep

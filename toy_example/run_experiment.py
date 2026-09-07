@@ -3,21 +3,21 @@
 from pathlib import Path
 import numpy as np
 import torch
-from toy_lipschitz.toy_functions import(
+from toy_example.toy_functions import(
     tier_a_f, tier_a_true_L, tier_b_f, tier_b_grad, tier_b_true_L,
-    piecewise_ramp_f, piecewise_ramp_true_L, piecewise_sum_f, piecewise_sum_true_L,
+    piecewise_ramp_f, piecewise_ramp_true_L,
 )
-from toy_lipschitz.data import sample_uniform, sample_with_gap, make_dataset, local_sample_density
-from toy_lipschitz.models import SingleTanhUnit, TinyMLP, train_regressor
-from toy_lipschitz.estimators import (
+from toy_example.data import sample_uniform, sample_with_gap, make_dataset, local_sample_density
+from toy_example.models import SingleTanhUnit, TinyMLP, train_regressor
+from toy_example.estimators import (
     pairwise_lipschitz,
     local_perturbation_lipschitz,
     gradient_norm_estimate,
     gradient_norm_estimate_grid,
     local_perturbation_lipschitz_grid,
 )
-from toy_lipschitz.embeddings import polynomial_embedding, empirical_covariance, precision_from_covariance
-from toy_lipschitz import plots
+from toy_example.embeddings import polynomial_embedding, empirical_covariance, precision_from_covariance
+from toy_example import plots
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 DOMAIN = (-5.0, 5.0)
@@ -47,7 +47,7 @@ def run_tier_a_sanity(tol=0.10, verbose=True):
 
     L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
-    torch.manual_seed(SEED)  # see train_tiny_mlp -- must precede construction to control init
+    torch.manual_seed(SEED)  # controls model init; must precede construction
     model = SingleTanhUnit(input_dim=d)
     model, history = train_regressor(model, x_train, y_train, epochs=2000, lr=0.05, seed=SEED)
 
@@ -168,8 +168,8 @@ def run_tier_a_gap_demo(N=400, w=(4.0,), b=0.5, A=1.5, gap_radius=0.5, gap_fract
         x_grid.squeeze(-1).numpy(), dataset_results, L_star,
         save_path=RESULTS_DIR / "tier_a_local_vs_global_lipschitz.png")
 
-    return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results,
-            "figure": fig, "figure_local_vs_global": fig_local_vs_global}
+    return {"L_star": L_star, "x_star": x_star, "x_grid": x_grid.squeeze(-1), "report": report,
+            "dataset_results": dataset_results, "figure": fig, "figure_local_vs_global": fig_local_vs_global}
 
 
 
@@ -286,8 +286,7 @@ def build_gap_and_uniform_datasets(components, x_star, N, gap_radius=0.5, gap_fr
 
 
 def train_tiny_mlp(x_train, y_train, hidden_sizes=(64, 64), activation="tanh", epochs=3000, lr=1e-2, seed=SEED):
-    torch.manual_seed(seed)  # must precede construction: train_regressor's own seed only fires
-    # after the model already exists, so on its own it never controls initialization (see models.py)
+    torch.manual_seed(seed)  # controls model init; must precede construction
     model = TinyMLP(input_dim=x_train.shape[1], hidden_sizes=hidden_sizes, activation=activation)
     model, history = train_regressor(model, x_train, y_train, epochs=epochs, lr=lr, seed=seed)
     return model, history
@@ -393,7 +392,7 @@ def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1
         L_hat_data, _, _ = pairwise_lipschitz(x_train, y_train, norm="l2")
 
         for activation in ["tanh", "relu"]:
-            torch.manual_seed(SEED)  # see train_tiny_mlp -- must precede construction to control init
+            torch.manual_seed(SEED)  # controls model init; must precede construction
             model = TinyMLP(input_dim=1, hidden_sizes=hidden_sizes, activation=activation)
             model, history = train_regressor(model, x_train, y_train, epochs=epochs, lr=lr, seed=SEED)
 
@@ -482,7 +481,7 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
     held_out_grid = torch.linspace(DOMAIN[0], DOMAIN[1], held_out_grid_size).unsqueeze(-1)
 
     if verbose:
-        print(f"=== Step 7 sweeps: ground truth L* = {L_star:.4f} (x* = {x_star.tolist()}) ===")
+        print(f"=== Sweeps: ground truth L* = {L_star:.4f} (x* = {x_star.tolist()}) ===")
 
     RESULTS_DIR.mkdir(exist_ok=True)
     all_results = {}
@@ -515,7 +514,7 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
 
 
 # ---------------------------------------------------------------------------
-# Seed-averaged N-sweep (to check if the non-monotonicity survives averaging)
+# Seed-averaged N-sweep
 # ---------------------------------------------------------------------------
 
 def sweep_over_N_seed_averaged(dataset_type, components, L_star, x_star, held_out_grid,
@@ -525,7 +524,6 @@ def sweep_over_N_seed_averaged(dataset_type, components, L_star, x_star, held_ou
     """Repeats sweep_over_N independently for `n_seeds` seeds (base_seed, base_seed+1, ..., varying both the sampled dataset and the
     model's init/training via sweep_over_N's `seed` parameter), holding every other hyperparameter fixed.
     Returns both the raw per-seed results and the aggregated mean/std/min/max across seeds for each N.
-    Checks if the non-monotonicity observed in L_hat_model vs. N survives averaging over multiple random seeds.
     """
     seeds = [base_seed + i for i in range(n_seeds)]
     L_hat_data_per_seed, L_hat_model_per_seed = [], []

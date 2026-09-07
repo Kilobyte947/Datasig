@@ -5,15 +5,15 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from toy_lipschitz.toy_functions import tier_a_f, tier_a_grad, tier_a_true_L
-from toy_lipschitz.estimators import (
+from toy_example.toy_functions import tier_a_f, tier_a_grad, tier_a_true_L
+from toy_example.estimators import (
     pairwise_lipschitz,
     local_perturbation_lipschitz,
     gradient_norm_estimate,
     gradient_norm_estimate_grid,
     local_perturbation_lipschitz_grid,
 )
-from toy_lipschitz.embeddings import polynomial_embedding, augmented_embedding, empirical_covariance, precision_from_covariance
+from toy_example.embeddings import polynomial_embedding, augmented_embedding, empirical_covariance, precision_from_covariance
 
 
 W = torch.tensor([3.0, -4.0])

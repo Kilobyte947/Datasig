@@ -7,7 +7,7 @@ These are kept as clearly separate functions throughout and are related but dist
 
 import torch
 
-from toy_lipschitz.embeddings import _mahalanobis_dist
+from toy_example.embeddings import _mahalanobis_dist
 
 torch.set_default_dtype(torch.float64)
 
@@ -127,7 +127,9 @@ def local_perturbation_lipschitz(f, x0, radius, n_samples, norm="l2", seed=None,
     else:
         dist = _norm(deltas, norm)
 
-    ratio = (f_xp - f_x0).abs() / dist.clamp_min(1e-12)
+    dy = (f_xp - f_x0).abs()
+    valid = dist > 1e-12
+    ratio = torch.where(valid, dy / dist.clamp_min(1e-12), torch.zeros_like(dist))
     L_hat, idx = ratio.max(dim=0)
     return L_hat.item(), x_primes[idx]
 
@@ -167,7 +169,7 @@ def gradient_norm_estimate_grid(f, X, norm="l2"):
 def local_perturbation_lipschitz_grid(f, X, radius, n_samples, norm="l2", seed=None, embed_fn=None, precision=None):
     """local_perturbation_lipschitz evaluated at every row of X (N, d).
     Returns the full (N,) array of L_hat values, not just the max.
-    embed_fn/precision, if given, are passed through unchanged (seelocal_perturbation_lipschitz).
+    embed_fn/precision, if given, are passed through unchanged (see local_perturbation_lipschitz).
     """
     X = _as_tensor(X)
     results = torch.empty(X.shape[0])

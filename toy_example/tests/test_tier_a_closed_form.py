@@ -5,7 +5,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from toy_lipschitz.toy_functions import tier_a_f, tier_a_grad, tier_a_true_L
+from toy_example.toy_functions import tier_a_f, tier_a_grad, tier_a_true_L
 
 
 def _random_case(d, seed):
