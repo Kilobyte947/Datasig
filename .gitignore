@@ -8,13 +8,12 @@ __pycache__/
 toy_example/results/*
 !toy_example/results/.gitkeep
 
-mnist_lipschitz/results/*
-!mnist_lipschitz/results/.gitkeep
-mnist_lipschitz/data/*
-!mnist_lipschitz/data/known_label_errors_mnist_test.json
-
-mnist_lipschitz/adversarial/results/*
-!mnist_lipschitz/adversarial/results/.gitkeep
+mnist_example/results/*
+!mnist_example/results/.gitkeep
+mnist_example/data/*
+!mnist_example/data/known_label_errors_mnist_test.json
+mnist_example/checkpoints/*
+!mnist_example/checkpoints/.gitkeep
 
 signature_distance/results/*
 !signature_distance/results/.gitkeep
