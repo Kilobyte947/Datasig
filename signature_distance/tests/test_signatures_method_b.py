@@ -20,7 +20,7 @@ def test_signature_straight_line_matches_tensor_exponential():
         + [v**3 / 6] * 8
         + [v**4 / 24] * 16
     )
-    assert torch.allclose(sig[0], expected, atol=1e-4)
+    assert torch.allclose(sig[0].to(expected.dtype), expected, atol=1e-4)
 
 
 def test_signature_l_shape_matches_hand_computed_area_term():
@@ -35,7 +35,7 @@ def test_signature_l_shape_matches_hand_computed_area_term():
     stream = torch.tensor([[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]])
     sig = signature_of_stream(stream, depth=2)
     expected = torch.tensor([1.0, 1.0, 1.0, 0.5, 1.0, 0.0, 0.5])
-    assert torch.allclose(sig[0], expected, atol=1e-4)
+    assert torch.allclose(sig[0].to(expected.dtype), expected, atol=1e-4)
 
 
 def test_signature_on_real_line_stream():
@@ -49,4 +49,4 @@ def test_signature_on_real_line_stream():
         assert sig.shape == (3, 31)
         assert torch.isfinite(sig).all()
         expected = one_line[:, -1, :] - one_line[:, 0, :]
-        assert torch.allclose(sig[:, 1:3], expected, atol=1e-4)
+        assert torch.allclose(sig[:, 1:3].to(expected.dtype), expected, atol=1e-4)

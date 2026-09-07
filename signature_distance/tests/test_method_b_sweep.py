@@ -81,19 +81,18 @@ def test_evaluate_config_depth_prefix_matches_direct_computation():
 
 
 def test_run_stage_b_validation_smoke():
-    # Tiny/fast smoke test: real training (1 epoch, small sample) just to
-    # confirm the plumbing (shared perturbations across finalists, per-line
-    # distances/ratios per finalist) runs end-to-end without error and
-    # produces well-formed output - not meant to validate the actual
-    # numbers (that's the real Stage B run's job).
+    # Tiny/fast smoke test: loads the canonical checkpoint (no training),
+    # small sample, just to confirm the plumbing (shared perturbations
+    # across finalists, per-line distances/ratios per finalist) runs
+    # end-to-end without error and produces well-formed output - not meant
+    # to validate the actual numbers (that's the real Stage B run's job).
     finalists = [
         {"name": "f1", "angles_deg": (0, 90), "counts": (8, 8), "points_per_line": 8,
          "depth": 2, "interpolation": "linear"},
         {"name": "f2", "angles_deg": (0,), "counts": (16,), "points_per_line": 8,
          "depth": 2, "interpolation": "linear"},
     ]
-    out = run_stage_b_validation(finalists, n_per_class=2, epsilons=(0.05,), seed=0,
-                                  cnn_epochs=1, strong_epochs=1, verbose=False)
+    out = run_stage_b_validation(finalists, n_per_class=2, epsilons=(0.05,), seed=0, verbose=False)
 
     assert out["n_images"] == 20
     assert set(out["results"].keys()) == {"f1", "f2"}

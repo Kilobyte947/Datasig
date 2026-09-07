@@ -2,7 +2,7 @@
 for a small set of sample images and save display figures to results/, for
 the notebooks to show. Both methods' demos live here, matching the rest of
 the project's convention (one run_experiment.py per package, many `_demo`/
-`run_*` functions - see e.g. mnist_lipschitz/run_experiment.py).
+`run_*` functions - see e.g. mnist_example/run_experiment.py).
 """
 
 from pathlib import Path
@@ -10,6 +10,8 @@ from pathlib import Path
 import torch
 
 from signature_distance import plots
+
+torch.set_default_dtype(torch.float64)
 from signature_distance.data_pool import load_eval_pool
 from signature_distance.distances import (
     choose_rescale_factor,
@@ -48,7 +50,7 @@ def stream_construction_demo(n_digits: int = 3, seed: int = 0) -> dict:
 
         stream = line_stream(image.unsqueeze(0), lines)[0]  # (16, 32, 2)
         # One signature per line, kept separate (no cross-line concatenation
-        # before the signature step - see Method_B.md).
+        # before the signature step - see README.md).
         sig = signature_of_stream(stream, depth=SIGNATURE_DEPTH)  # (16, sig_dim)
 
         figures[f"digit{digit}_overlay"] = plots.plot_reference_lines(
@@ -105,7 +107,7 @@ def method_a_demo(n_digits: int = 3, seed: int = 0) -> dict:
 
 
 def sanity_check_demo(n_per_class: int = 30, seed: int = 0, depth: int = SIGNATURE_DEPTH) -> dict:
-    """PLAN.md Phase 4: within-digit vs. cross-digit mean distance, for
+    """README.md Phase 4: within-digit vs. cross-digit mean distance, for
     both methods independently, on a modest sample (default 300 images,
     30/class). Order of operations, per plan: rescale each method's raw
     signatures (r chosen empirically per method via

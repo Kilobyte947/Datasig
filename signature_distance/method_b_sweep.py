@@ -7,11 +7,11 @@ Reuses existing signature/distance/adversarial infrastructure:
 `make_reference_lines`/`line_stream` (streams.py), `signature_of_stream`
 (signatures.py), `choose_rescale_factor`/`rescale_signature`/
 `per_line_distances`/`auc_for_distance` (distances.py), and
-`SmallCNN`/`StrongCNN`/`train_classifier`/`fgsm_attack`/`margin`/
-`random_noise_perturbation` (method_b_adversarial_eval.py). This module
+`train_or_load_small_cnn`/`train_or_load_strong_cnn` (models.py) /
+`fgsm_attack`/`margin`/`random_noise_perturbation` (attacks.py). This module
 adds new stream-construction variants (a cubic-spline refinement on top of
 the existing linear stream) and new sweep/scoring orchestration.
-`per_line_aucs` below and `per_line_diagnostics.py` both need the same
+`per_line_aucs` below and `distances.run_per_line_auc_diagnostic` both need the same
 same/different-digit AUC computation (one hardcoded to the default
 geometry, one generalized over the sweep grid) - factored into
 `distances.auc_for_distance`, a small shared addition, rather than each
@@ -30,25 +30,21 @@ import numpy as np
 import torch
 from scipy.interpolate import CubicSpline
 
+from signature_distance.attacks import fgsm_attack, random_noise_perturbation
 from signature_distance.data_pool import load_eval_pool
 from signature_distance.distances import (
     auc_for_distance,
     choose_rescale_factor,
+    margin,
     per_line_distances,
+    pixel_euclidean_distance,
     rescale_signature,
 )
-from signature_distance.method_b_adversarial_eval import (
-    SmallCNN,
-    StrongCNN,
-    fgsm_attack,
-    load_mnist_train_test,
-    margin,
-    pixel_euclidean_distance,
-    random_noise_perturbation,
-    train_classifier,
-)
+from signature_distance.models import train_or_load_small_cnn, train_or_load_strong_cnn
 from signature_distance.signatures import signature_of_stream
 from signature_distance.streams import line_stream, make_reference_lines
+
+torch.set_default_dtype(torch.float64)
 
 WIDTH = 2
 
@@ -77,8 +73,8 @@ def cubic_spline_refine(stream_one_line: torch.Tensor, upsample_factor: int = 8)
     t = stream_one_line[:, :, 0].numpy()
     v = stream_one_line[:, :, 1].numpy()
 
-    fine_t_frac = np.linspace(0.0, 1.0, k * upsample_factor)
-    out = np.empty((n, k * upsample_factor, 2), dtype=np.float32)
+    fine_t_frac = np.linspace(0.0, 1.0, k * upsample_factor).astype(t.dtype)
+    out = np.empty((n, k * upsample_factor, 2), dtype=t.dtype)
     for i in range(n):
         # t is already arange(k)/(k-1) for every image (time_channel) -
         # spline is fit over that fixed grid, only v varies per image.
@@ -109,8 +105,8 @@ def build_stream(images: torch.Tensor, angles_deg: tuple, counts: tuple,
 
 def per_line_aucs(sig: torch.Tensor, labels: torch.Tensor) -> list:
     """Same/different-digit AUC per line - uses the same shared
-    `distances.auc_for_distance` helper `per_line_diagnostics.py` does
-    (that module is hardcoded to the default geometry/depth=4; this
+    `distances.auc_for_distance` helper `distances.run_per_line_auc_diagnostic`
+    does (that function is hardcoded to the default geometry/depth=4; this
     version works for any geometry/depth, hence the separate call site)."""
     n = sig.shape[0]
     iu, ju = torch.triu_indices(n, n, offset=1)
@@ -167,7 +163,7 @@ INTERPOLATION_VARIANTS = ("linear", "cubic")
 
 
 def run_stage_a_sweep(n_per_class: int = 15, seed: int = 0, verbose: bool = True) -> list:
-    """Full joint sweep (per PLAN.md's Stage 8 note: "sweep together, not
+    """Full joint sweep (per README.md's Stage 8 note: "sweep together, not
     staged one-at-a-time") over geometry x points x depth x interpolation.
     Depth is handled cheaply via the max-depth-then-slice shortcut above,
     so the actual expensive-computation grid is geometry x points x
@@ -220,18 +216,18 @@ def _config_signatures(images: torch.Tensor, angles_deg: tuple, counts: tuple,
 
 
 def run_stage_b_validation(finalists: list, n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05),
-                            seed: int = 0, cnn_epochs: int = 3, strong_epochs: int = 3,
-                            verbose: bool = True) -> dict:
+                            seed: int = 0, verbose: bool = True) -> dict:
     """Full per-path adversarial/control evaluation for each finalist
-    config, same framework as per_path_adversarial_eval.py (FGSM, matched
+    config, same framework as adversarial_eval.run_per_path_adversarial_eval (FGSM, matched
     random control, margin-difference numerator, per-line distances -
-    reused unmodified via method_b_adversarial_eval.py/distances.py
+    reused unmodified via models.py/attacks.py/distances.py
     imports), applied to each finalist's own stream construction instead
     of the fixed baseline geometry.
 
-    SmallCNN/StrongCNN are trained ONCE (they don't depend on Method B's
-    geometry) and reused across every finalist - and the FGSM/control
-    perturbations (also model/epsilon-dependent only, not Method-B-config-
+    Loads the shared canonical SmallCNN/StrongCNN checkpoint ONCE (no
+    training - see `adversarial_eval.run_pgd_comparison`'s docstring for
+    why) and reuses it across every finalist - and the FGSM/control
+    perturbations (model/epsilon-dependent only, not Method-B-config-
     dependent) are likewise computed once per model/epsilon and reused,
     not regenerated per finalist.
 
@@ -239,17 +235,10 @@ def run_stage_b_validation(finalists: list, n_per_class: int = 20, epsilons=(0.0
     points_per_line, depth, interpolation.
     """
     torch.manual_seed(seed)
-    train_loader, test_loader = load_mnist_train_test()
-
     models = {}
-    for name, model, epochs in [("SmallCNN", SmallCNN(), cnn_epochs), ("StrongCNN", StrongCNN(), strong_epochs)]:
-        if verbose:
-            print(f"Training {name} ({epochs} epochs)...")
-        trained, _, test_acc = train_classifier(model, train_loader, test_loader, epochs=epochs, verbose=verbose)
-        trained.eval()
+    for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
+        trained, _, test_acc = loader(verbose=verbose)
         models[name] = {"model": trained, "test_acc": test_acc}
-        if verbose:
-            print(f"  {name}: test_acc={test_acc:.4f}")
 
     images, labels = load_eval_pool(n_per_class=n_per_class, seed=seed)
     images_c = images.unsqueeze(1)

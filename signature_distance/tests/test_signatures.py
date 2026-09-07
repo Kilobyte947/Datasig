@@ -9,13 +9,16 @@ def test_signature_shape():
     sig = signature_of_stream(stream, depth=4)
     # truncated tensor algebra size for width=2, depth=4: 1+2+4+8+16 = 31
     assert sig.shape == (3, 31)
+    # signature_of_stream always returns float32 (JAX's own precision
+    # ceiling, see signatures.py's docstring) regardless of this package's
+    # float64 default elsewhere - not a stale assumption to "fix" to float64.
     assert sig.dtype == torch.float32
 
 
 def test_signature_constant_term_is_one():
     stream = torch.rand(4, 8, 2)
     sig = signature_of_stream(stream, depth=4)
-    assert torch.allclose(sig[:, 0], torch.ones(4), atol=1e-5)
+    assert torch.allclose(sig[:, 0], torch.ones(4, dtype=sig.dtype), atol=1e-5)
 
 
 def test_signature_level1_equals_net_displacement():
@@ -27,7 +30,7 @@ def test_signature_level1_equals_net_displacement():
     stream = torch.rand(5, 10, 2)
     sig = signature_of_stream(stream, depth=4)
     expected = stream[:, -1, :] - stream[:, 0, :]
-    assert torch.allclose(sig[:, 1:3], expected, atol=1e-4)
+    assert torch.allclose(sig[:, 1:3].to(expected.dtype), expected, atol=1e-4)
 
 
 def test_signature_no_nan_or_inf():
@@ -54,4 +57,4 @@ def test_signature_on_real_patch_sv_stream():
     assert sig.shape == (3, 31)
     assert torch.isfinite(sig).all()
     expected = stream[:, -1, :] - stream[:, 0, :]
-    assert torch.allclose(sig[:, 1:3], expected, atol=1e-4)
+    assert torch.allclose(sig[:, 1:3].to(expected.dtype), expected, atol=1e-4)

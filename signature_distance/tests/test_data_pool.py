@@ -15,7 +15,7 @@ def test_shapes_and_dtypes():
     images, labels = load_eval_pool(n_per_class=n_per_class, seed=0, root=str(DATA_ROOT))
     assert images.shape == (10 * n_per_class, 28, 28)
     assert labels.shape == (10 * n_per_class,)
-    assert images.dtype == torch.float32
+    assert images.dtype == torch.float64
     assert labels.dtype == torch.int64
 
 
