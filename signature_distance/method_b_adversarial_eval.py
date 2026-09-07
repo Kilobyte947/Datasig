@@ -18,12 +18,27 @@ own docstring - not imports, and not guaranteed to produce identical trained
 weights (different init/seed even with an identical architecture): treat any
 comparison against Experiment 2's documented numbers as architecture-level,
 not an exact reproduction.
+
+REPRODUCIBILITY CAVEAT (StrongCNN specifically): `torch.manual_seed(seed)`
+below fixes RNG draws (init, dropout masks, data shuffling), but not the
+floating-point summation order of PyTorch's CPU multi-threaded reductions
+(BatchNorm's per-batch mean/var, Conv2d's matmul reduction) - floating-point
+addition isn't associative, so those can still vary run-to-run depending on
+CPU thread scheduling, especially under contention from other concurrent
+processes. Verified directly: `SmallCNN` (no BatchNorm/Dropout) reproduces
+every downstream figure exactly given a fixed seed; `StrongCNN` (BatchNorm
+x6 + Dropout x3) does not - fresh reruns of every headline number in this
+package involving StrongCNN drifted 5-28% from previously reported figures,
+sometimes in either direction, while every *directional* conclusion (which
+model/method wins, exception counts, entropy-concentration direction, CI
+non-overlap) held up unchanged. Treat any StrongCNN point estimate in this
+package's docs as reproducible in direction and rough magnitude, not to the
+decimal - this is a property of PyTorch's CPU execution model, not a bug in
+this module, and is not something `torch.manual_seed` alone fixes.
 """
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

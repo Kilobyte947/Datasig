@@ -271,6 +271,17 @@ longer the recommended one for new Method B work. See "Method B
 hyperparameter sweep and Method C" further down for the current default and
 what replaced it.
 
+**Reproducibility caveat for every StrongCNN figure below**: fixing
+`torch.manual_seed` does not fix PyTorch CPU multi-threaded reductions'
+floating-point summation order (BatchNorm/Dropout-sensitive), so StrongCNN
+point estimates specifically (not SmallCNN's, which reproduce exactly) can
+drift 5-28% run-to-run depending on CPU scheduling/contention, in either
+direction — verified directly by rerunning every headline number in this
+package. Every *directional* finding involving StrongCNN (which
+model/method wins, exception counts, which way an effect points) held up
+across reruns; only the exact decimal figures are not bit-reproducible.
+Full detail: `method_b_adversarial_eval.py`'s module docstring.
+
 **Phase 1 — stream construction shapes and timing** (1000-image default
 pool, `n_per_class=100, seed=0`, Apple Silicon CPU, no GPU): pool loading
 ~0.007s; Method A stream construction ~0.018s; Method B stream construction

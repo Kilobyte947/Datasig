@@ -9,8 +9,6 @@ from pathlib import Path
 
 import torch
 
-import torch
-
 from signature_distance import plots
 from signature_distance.data_pool import load_eval_pool
 from signature_distance.distances import (

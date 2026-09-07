@@ -4,6 +4,7 @@ from signature_distance.headline_plot import (
     METHOD_B_BORDER_LINE_INDICES,
     METHOD_B_INFORMATIVE_LINE_INDICES,
     collect_headline_data,
+    compare_line_counts,
     plot_headline_punchline,
 )
 
@@ -23,12 +24,14 @@ def _fake_headline_data():
                 "clean_test_acc": 0.9824,
                 "adv_acc_by_eps": {0.02: 0.965, 0.03: 0.96, 0.05: 0.93},
                 "method_b": {"clean_quantile": 1.2, "adv_quantile": 8.5},
+                "method_b_all16": {"clean_quantile": 1.3, "adv_quantile": 9.4},
                 "method_c": {"clean_quantile": 1.1, "adv_quantile": 6.9},
             },
             "StrongCNN": {
                 "clean_test_acc": 0.9936,
                 "adv_acc_by_eps": {0.02: 0.98, 0.03: 0.975, 0.05: 0.955},
                 "method_b": {"clean_quantile": 0.9, "adv_quantile": 4.2},
+                "method_b_all16": {"clean_quantile": 1.0, "adv_quantile": 4.9},
                 "method_c": {"clean_quantile": 0.8, "adv_quantile": 3.1},
             },
         },
@@ -58,8 +61,33 @@ def test_collect_headline_data_smoke():
     for mname, entry in data["models"].items():
         assert 0.0 <= entry["clean_test_acc"] <= 1.0
         assert 0.0 <= entry["adv_acc_by_eps"][0.05] <= 1.0
-        for method_key in ("method_b", "method_c"):
+        for method_key in ("method_b", "method_b_all16", "method_c"):
             cq = entry[method_key]["clean_quantile"]
             aq = entry[method_key]["adv_quantile"]
             assert cq == cq and aq == aq  # not NaN
             assert aq >= cq
+
+
+def test_compare_line_counts_zero_cost_on_fake_data():
+    data = _fake_headline_data()
+    comparison = compare_line_counts(data)
+    assert set(comparison.keys()) == {"SmallCNN", "StrongCNN"}
+    small_adv = comparison["SmallCNN"]["adv_quantile"]
+    assert small_adv["twelve_line"] == 8.5
+    assert small_adv["all_16_line"] == 9.4
+    assert abs(small_adv["delta"] - 0.9) < 1e-9
+    assert abs(small_adv["pct_change"] - (0.9 / 8.5 * 100)) < 1e-6
+
+
+def test_compare_line_counts_matches_real_collect_output():
+    # The comparison helper must accept collect_headline_data's own output
+    # shape directly, not just the hand-built fake above.
+    data = collect_headline_data(
+        n_per_class=2, epsilons=(0.05,), primary_eps=0.05, seed=0,
+        cnn_epochs=1, strong_epochs=1, verbose=False,
+    )
+    comparison = compare_line_counts(data)
+    for mname in ("SmallCNN", "StrongCNN"):
+        for cond in ("clean_quantile", "adv_quantile"):
+            c = comparison[mname][cond]
+            assert c["all_16_line"] - c["twelve_line"] == c["delta"]

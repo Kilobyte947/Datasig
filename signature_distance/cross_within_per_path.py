@@ -51,21 +51,31 @@ from signature_distance.streams import line_stream
 RESULTS_DIR = Path(__file__).parent / "results"
 
 
+_DEGENERATE_THRESHOLD = 1e-9  # comfortably above distances.py's 1e-12 division floor
+
+
 def _safe_within_vs_cross(vectors: torch.Tensor, labels: torch.Tensor) -> dict:
     """Wraps `within_vs_cross_digit_distance` (unmodified) with a guard
     against the real, discovered failure mode: a structurally degenerate
     line/segment (e.g. Method B's border lines, which sit on image rows/
     columns MNIST digits never touch) produces the IDENTICAL signature for
     every image regardless of digit, giving a within-digit distance of
-    exactly 0 and a division by zero - not a coding error to swallow
-    silently, but a real, informative outcome (this line/segment carries
-    no same/different-digit signal at all) worth reporting as such rather
-    than crashing the whole comparison."""
-    try:
-        result = within_vs_cross_digit_distance(vectors, labels)
-    except ZeroDivisionError:
+    (near) zero - not a coding error to swallow silently, but a real,
+    informative outcome (this line/segment carries no same/different-digit
+    signal at all) worth reporting as such rather than folding it into the
+    aggregate stats as if it were a real ratio.
+
+    Degeneracy is detected by checking `within_digit_mean` directly against
+    `_DEGENERATE_THRESHOLD`, not by catching a ZeroDivisionError from
+    `within_vs_cross_digit_distance` - that function now floors its own
+    division (matching `per_line_distances`'s epsilon floor), so it no
+    longer raises on an exactly-zero within-mean; checking the value
+    directly here also catches the near-zero case a bare exception never
+    would have."""
+    result = within_vs_cross_digit_distance(vectors, labels)
+    if result["within_digit_mean"] <= _DEGENERATE_THRESHOLD:
         return {
-            "within_digit_mean": 0.0, "cross_digit_mean": float("nan"),
+            "within_digit_mean": result["within_digit_mean"], "cross_digit_mean": float("nan"),
             "ratio_cross_over_within": float("nan"), "degenerate": True,
         }
     result["degenerate"] = False

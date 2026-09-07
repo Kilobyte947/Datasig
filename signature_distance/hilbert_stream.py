@@ -190,13 +190,19 @@ def hilbert_stream(images: torch.Tensor, curve_points: torch.Tensor) -> torch.Te
 DEPTH_VARIANTS = (2, 3, 4)
 
 
-def evaluate_hilbert_depths(n_per_class: int = 15, seed: int = 0,
+def evaluate_hilbert_depths(n_per_class: int = 30, seed: int = 0,
                              depths=DEPTH_VARIANTS) -> dict:
     """Same/different-digit AUC per segment, for each depth in `depths`,
     computed via the same max-depth-then-prefix-slice shortcut used for
     Method B's sweep (verified there to be numerically exact) - the
     expensive signature step runs once, at the maximum depth, and every
     lower depth is sliced from that single result.
+
+    Default n_per_class=30 matches what notebook_method_c.ipynb actually
+    calls this with to produce Method_C.md's Stage A depth-sweep table
+    (0.5654/0.6485 at depth 2, etc.) - an earlier default of 15 here did
+    not reproduce that table (gave 0.5722/0.6874 instead), a reproducibility
+    trap for anyone calling this with its bare defaults.
     """
     images, labels = load_eval_pool(n_per_class=n_per_class, seed=seed)
     curve = make_hilbert_curve()

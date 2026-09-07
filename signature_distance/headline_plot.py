@@ -38,21 +38,30 @@ Two choices worth stating plainly rather than leaving implicit:
   elsewhere) - this is a different, complementary statistic: the general
   local-sensitivity distribution at a given perturbation magnitude, not
   one conditioned on attack success.
-- **Method B's quantile excludes its 4 structurally border-adjacent lines
-  (indices 0, 11, 12, 15 for the 12h+4v winning geometry - the first/last
-  horizontal and vertical line, which sit exactly on the image border and
-  have near-zero baseline signature distance regardless of perturbation).**
-  This matches the reasoning already used elsewhere in this project for
-  excluding the analogous 4 border lines of the original 8h+8v geometry
-  (`per_path_adversarial_eval.BORDER_LINE_INDICES`/`spike_analysis`'s own
-  note that their near-zero-denominator ratios are "numerically
-  degenerate ... not meaningful") - a high quantile is exactly where such
-  outliers would otherwise dominate. This is a DIFFERENT subset than the
-  all-16-line mean-fold numbers already reported for Method B elsewhere
-  (13.53x FGSM / 16.97x PGD) - stated explicitly here rather than left to
-  cause confusion between the two. Method C's quantile uses all 16
+- **Method B's headline quantile excludes its 4 structurally border-adjacent
+  lines (indices 0, 11, 12, 15 for the 12h+4v winning geometry - the
+  first/last horizontal and vertical line, which sit exactly on the image
+  border and have near-zero baseline signature distance regardless of
+  perturbation).** This matches the reasoning already used elsewhere in
+  this project for excluding the analogous 4 border lines of the original
+  8h+8v geometry (`per_path_adversarial_eval.BORDER_LINE_INDICES`/
+  `spike_analysis`'s own note that their near-zero-denominator ratios are
+  "numerically degenerate ... not meaningful") - a high quantile is exactly
+  where such outliers would otherwise dominate. This is a DIFFERENT subset
+  than the all-16-line mean-fold numbers already reported for Method B
+  elsewhere (13.53x FGSM / 16.97x PGD) - stated explicitly here rather than
+  left to cause confusion between the two. Method C's quantile uses all 16
   segments, unchanged from how its own numbers were already reported
   (Stage A found no structurally degenerate segment).
+- **`collect_headline_data` also reports an all-16-line Method B variant
+  (`method_b_all16`) alongside the 12-line headline one, closing the
+  Method B (12) vs. Method C (16) subset-count asymmetry for this metric
+  specifically** - computed from the exact same already-fetched
+  `ratio_control`/`ratio_adv` tensors (`eb["eps"][primary_eps]`), so this
+  costs no extra training/attack computation, only a different
+  aggregation. Lets the border-line-exclusion concern that motivated the
+  12-line convention be checked directly rather than assumed: see
+  `compare_line_counts` below.
 """
 
 from pathlib import Path
@@ -125,6 +134,10 @@ def collect_headline_data(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), pr
 
         ratio_control_b = pe_b["ratio_control"][:, b_idx].flatten()
         ratio_adv_b = pe_b["ratio_adv"][:, b_idx].flatten()
+        # All 16 lines, no border exclusion - same underlying tensors as
+        # above, just not sliced to the informative subset first.
+        ratio_control_b_all16 = pe_b["ratio_control"].flatten()
+        ratio_adv_b_all16 = pe_b["ratio_adv"].flatten()
         ratio_control_c = pe_c["ratio_control"].flatten()
         ratio_adv_c = pe_c["ratio_adv"].flatten()
 
@@ -135,6 +148,10 @@ def collect_headline_data(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), pr
                 "clean_quantile": torch.quantile(ratio_control_b, quantile).item(),
                 "adv_quantile": torch.quantile(ratio_adv_b, quantile).item(),
             },
+            "method_b_all16": {
+                "clean_quantile": torch.quantile(ratio_control_b_all16, quantile).item(),
+                "adv_quantile": torch.quantile(ratio_adv_b_all16, quantile).item(),
+            },
             "method_c": {
                 "clean_quantile": torch.quantile(ratio_control_c, quantile).item(),
                 "adv_quantile": torch.quantile(ratio_adv_c, quantile).item(),
@@ -142,6 +159,28 @@ def collect_headline_data(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), pr
         }
 
     return data
+
+
+def compare_line_counts(data: dict) -> dict:
+    """Method B's P90 quantile using its 12 informative lines vs. all 16
+    (no border exclusion), per model and condition - same underlying ratio
+    arrays as `collect_headline_data` already computed, so this is a pure
+    aggregation-level comparison, no extra computation. Answers directly
+    whether including the 4 known-degenerate border lines actually shifts
+    a tail statistic the way excluding them was meant to prevent (rather
+    than just assuming it would)."""
+    out = {}
+    for mname, entry in data["models"].items():
+        out[mname] = {}
+        for cond in ("clean_quantile", "adv_quantile"):
+            twelve = entry["method_b"][cond]
+            sixteen = entry["method_b_all16"][cond]
+            out[mname][cond] = {
+                "twelve_line": twelve, "all_16_line": sixteen,
+                "delta": sixteen - twelve,
+                "pct_change": (sixteen - twelve) / twelve * 100 if twelve else float("nan"),
+            }
+    return out
 
 
 def plot_headline_punchline(data: dict, title: str = None, save_path=None):

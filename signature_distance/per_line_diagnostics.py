@@ -20,7 +20,6 @@ from signature_distance.distances import (
     auc_for_distance,
     choose_rescale_factor,
     method_b_feature_vector,
-    per_line_distances,
     rescale_signature,
 )
 from signature_distance.signatures import signature_of_stream

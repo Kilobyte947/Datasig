@@ -96,13 +96,41 @@ def test_collect_headline_bootstrap_smoke():
     )
     assert set(data["models"].keys()) == {"SmallCNN", "StrongCNN"}
     for mname, entry in data["models"].items():
-        for method_key in ("method_b", "method_c"):
+        for method_key in ("method_b", "method_b_all16", "method_c"):
             for cond in ("clean", "adv"):
                 r = entry[method_key][cond]
                 assert r["ci_low"] <= r["point_estimate"] <= r["ci_high"]
                 assert r["n_images"] == 20
 
     overlap = check_overlap(data)
-    for method_key in ("method_b", "method_c"):
+    for method_key in ("method_b", "method_b_all16", "method_c"):
         for cond in ("clean", "adv"):
             assert isinstance(overlap[method_key][cond]["overlap"], bool)
+
+
+def test_check_overlap_skips_method_b_all16_when_absent():
+    # Backward compatibility: data collected before method_b_all16 existed
+    # (or any hand-built dict lacking it) must not make check_overlap raise.
+    data = _fake_bootstrap_data()
+    assert "method_b_all16" not in data["models"]["SmallCNN"]
+    result = check_overlap(data)
+    assert "method_b_all16" not in result
+    assert set(result.keys()) == {"method_b", "method_c"}
+
+
+def test_collect_headline_bootstrap_all16_uses_distinct_seed_stream_from_12line():
+    # method_b (12-line) and method_b_all16 must not accidentally share a
+    # bootstrap resampling stream - their point estimates differ (all-16
+    # includes the near-zero-distance border lines) so their CIs should
+    # generally differ too, and specifically their boot_std values (a
+    # function of the resampling draws) should not be identical unless the
+    # streams coincided by mistake.
+    data = collect_headline_bootstrap(
+        n_per_class=2, epsilons=(0.05,), primary_eps=0.05, seed=0,
+        cnn_epochs=1, strong_epochs=1, n_bootstrap=20, verbose=False,
+    )
+    for mname, entry in data["models"].items():
+        for cond in ("clean", "adv"):
+            twelve = entry["method_b"][cond]
+            sixteen = entry["method_b_all16"][cond]
+            assert twelve["point_estimate"] != sixteen["point_estimate"]

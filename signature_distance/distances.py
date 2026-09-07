@@ -105,8 +105,16 @@ def per_line_distances(sig1: torch.Tensor, sig2: torch.Tensor) -> torch.Tensor:
 
     sig1, sig2: (..., num_lines, sig_dim).
     returns: (..., num_lines).
+
+    Floored at 1e-12 (matching mnist_lipschitz/estimators.py's convention)
+    so a degenerate zero-distance line - e.g. a border line whose signature
+    is identical for both images - can't produce a division-by-zero/Inf
+    ratio in a downstream Lipschitz-ratio computation. A no-op on every
+    non-degenerate case in the project's reported numbers (verified: real
+    per-line distances are always many orders of magnitude above this
+    floor), so this doesn't change any previously reported figure.
     """
-    return (sig1 - sig2).norm(dim=-1)
+    return (sig1 - sig2).norm(dim=-1).clamp_min(1e-12)
 
 
 def within_vs_cross_digit_distance(vectors: torch.Tensor, labels: torch.Tensor) -> dict:
@@ -125,10 +133,15 @@ def within_vs_cross_digit_distance(vectors: torch.Tensor, labels: torch.Tensor) 
 
     within_mean = dist[within_mask].mean().item()
     cross_mean = dist[cross_mask].mean().item()
+    # Floored at 1e-12 (same convention as per_line_distances above) so a
+    # structurally degenerate line/vector set (e.g. Method B's border lines,
+    # whose signature is identical across every image) can't raise
+    # ZeroDivisionError or return a meaningless huge ratio - a no-op for
+    # every non-degenerate case actually reported in this project.
     return {
         "within_digit_mean": within_mean,
         "cross_digit_mean": cross_mean,
-        "ratio_cross_over_within": cross_mean / within_mean,
+        "ratio_cross_over_within": cross_mean / max(within_mean, 1e-12),
     }
 
 

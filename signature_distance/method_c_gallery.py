@@ -23,6 +23,18 @@ than being assumed to.
 
 Method B's side is read straight from `run_per_path_adversarial_eval`
 (`per_path_adversarial_eval.py`), unmodified.
+
+Line-numbering caveat: Method B's side of this gallery uses
+`per_path_adversarial_eval`'s original 8-horizontal + 8-vertical/depth-4
+geometry (`METHOD_B_LINES`/`INFORMATIVE_LINE_INDICES`), predating the
+`method_b_sweep.py` hyperparameter sweep - it has not been re-run against
+the swept 12h+4v/depth-2 default. A "line N" referenced anywhere in this
+module's output or the accompanying notebook cells therefore does NOT
+refer to the same physical line as "line N" in modules that do use the
+swept default (`headline_plot.py`, `headline_bootstrap.py`,
+`pgd_adversarial_eval.py`, `border_line_and_pixel_check.py`) - see
+Method_B.md's explicit note that index numbers are not comparable across
+the two geometries.
 """
 
 from pathlib import Path

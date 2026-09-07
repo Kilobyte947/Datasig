@@ -88,9 +88,12 @@ def collect_headline_bootstrap(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05
                                 verbose: bool = True) -> dict:
     """Reruns the same two FGSM drivers `headline_plot.collect_headline_data`
     calls, with identical parameters, to get the raw per-image ratio
-    arrays, then computes a bootstrap CI for each of the 8 P90 values (2
-    models x 2 conditions x 2 methods) already reported in the headline
-    table."""
+    arrays, then computes a bootstrap CI for each of the 12 P90 values (2
+    models x 2 conditions x 3 subsets: Method B's 12-informative-line
+    headline convention, Method B's all-16-line variant - closing the
+    subset-count asymmetry with Method C, no extra training/attack cost,
+    same already-fetched tensors - and Method C's own all-16-segment
+    convention)."""
     stage_b = sweep.run_stage_b_validation(
         finalists=[WINNER_FINALIST], n_per_class=n_per_class, epsilons=epsilons,
         seed=seed, cnn_epochs=cnn_epochs, strong_epochs=strong_epochs, verbose=verbose,
@@ -114,12 +117,16 @@ def collect_headline_bootstrap(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05
 
         # Distinct but fully deterministic bootstrap seed per (model, method,
         # condition) so the whole run is reproducible end to end, and no two
-        # of the 8 resampling runs accidentally share a random stream.
+        # of the 12 resampling runs accidentally share a random stream.
         base = seed * 1000 + model_num * 10
         out["models"][mname] = {
             "method_b": {
                 "clean": bootstrap_quantile_ci(eb["ratio_control"][:, b_idx], quantile, n_bootstrap, ci_level, seed=base + 1),
                 "adv": bootstrap_quantile_ci(eb["ratio_adv"][:, b_idx], quantile, n_bootstrap, ci_level, seed=base + 2),
+            },
+            "method_b_all16": {
+                "clean": bootstrap_quantile_ci(eb["ratio_control"], quantile, n_bootstrap, ci_level, seed=base + 5),
+                "adv": bootstrap_quantile_ci(eb["ratio_adv"], quantile, n_bootstrap, ci_level, seed=base + 6),
             },
             "method_c": {
                 "clean": bootstrap_quantile_ci(ec["ratio_control"], quantile, n_bootstrap, ci_level, seed=base + 3),
@@ -139,7 +146,9 @@ def check_overlap(data: dict) -> dict:
     small = data["models"]["SmallCNN"]
     strong = data["models"]["StrongCNN"]
     out = {}
-    for method_key in ("method_b", "method_c"):
+    for method_key in ("method_b", "method_b_all16", "method_c"):
+        if method_key not in small:
+            continue
         out[method_key] = {}
         for cond in ("clean", "adv"):
             s = small[method_key][cond]
