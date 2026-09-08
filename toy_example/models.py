@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn as nn
-
 torch.set_default_dtype(torch.float64)
 
 _ACTIVATIONS = {"tanh": nn.Tanh, "relu": nn.ReLU}
@@ -30,8 +29,7 @@ class TinyMLP(nn.Module):
 
 class SingleTanhUnit(nn.Module):
     """A model architecturally forced to match Tier A's ground truth exactly:
-    f(x) = A * tanh(w^T x + b), with A/w/b as learnable parameters. Used
-    only for the Tier A sanity check."""
+    f(x) = A * tanh(w^T x + b), with A/w/b as learnable parameters."""
 
     def __init__(self, input_dim):
         super().__init__()
@@ -48,8 +46,7 @@ def train_regressor(model, x_train, y_train, epochs, lr, weight_decay=0.0, seed=
     """Full-batch gradient descent (Adam optimizer, mean-squared-error loss).
     `seed`, if given, only seeds training randomness (there is none, since
     training is full-batch and deterministic) - it does not control weight
-    initialization. Callers that want a reproducible model must call
-    torch.manual_seed(seed) before constructing it."""
+    initialization. Returns the trained model and a list of loss values over epochs."""
     if seed is not None:
         torch.manual_seed(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)

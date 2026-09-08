@@ -1,4 +1,4 @@
-"""This file calls the toy functions, data sampling, model training, and estimators, in the right order, and reports numbers."""
+"""This file calls the toy functions, data sampling, model training, and estimators, and reports numbers."""
 
 from pathlib import Path
 import numpy as np
@@ -216,11 +216,10 @@ def run_metric_embedding_check(N=400, w=(4.0,), b=0.5, A=1.5, degree=3,
 
 def sweep_polynomial_degree(degrees=(1, 2, 3, 4, 5, 6), N=400, w=(4.0,), b=0.5, A=1.5,
                              gap_radius=0.5, gap_fraction=0.02, seed=SEED, verbose=True):
-    """Sweeps the polynomial embedding degree used in run_metric_embedding_check, tracking both relative 
-    error of L_hat_mahalanobis against L* and the condition number of the fitted embedding covariance. 
-    A degree can appear accurate on a single dataset while being numerically fragile, since high-degree 
-    polynomial features become collinear on a bounded domain -- both metrics are needed to select a degree.
-    """
+    """Sweeps the polynomial embedding degree, tracking both L_hat_mahalanobis's relative error 
+    against L* and the condition number of the fitted embedding covariance — a degree can look 
+    accurate on one dataset while being numerically fragile, since high-degree polynomial features
+    become collinear on a bounded domain."""
     if verbose:
         print(f"=== Polynomial degree sweep ===")
 
@@ -252,6 +251,8 @@ def sweep_polynomial_degree(degrees=(1, 2, 3, 4, 5, 6), N=400, w=(4.0,), b=0.5, 
 # ---------------------------------------------------------------------------
 
 def build_tier_b_1d():
+    """The Tier B 1D ground truth: a sum of three ridge functions at different steepness and offset. 
+    Returns (components, L_star, x_star)."""
     components = [
         {"w": torch.tensor([8.0]), "b": 3.0, "A": 1.0},   # steep, right-of-center
         {"w": torch.tensor([2.0]), "b": -3.0, "A": 1.0},  # shallow, left-of-center
@@ -262,6 +263,8 @@ def build_tier_b_1d():
 
 
 def build_tier_b_2d():
+    """The Tier B 2D ground truth: a sum of three ridge functions in different directions. 
+    Returns (components, L_star, x_star)."""
     components = [
         {"w": torch.tensor([8.0, 0.0]), "b": 3.0, "A": 1.0},    # steep ridge along x1
         {"w": torch.tensor([0.0, 2.0]), "b": -3.0, "A": 1.0},   # shallow ridge along x2
@@ -275,6 +278,8 @@ def build_tier_b_2d():
 # ---------------------------------------------------------------------------
 
 def build_gap_and_uniform_datasets(components, x_star, N, gap_radius=0.5, gap_fraction=0.02, seed=SEED):
+    """Builds a gap-sampled and a uniformly-sampled dataset from the same Tier B ground truth.
+    Returns a dict with keys "gap" and "uniform", each holding x_train and y_train."""
     f_star = lambda x: tier_b_f(x, components)
     x_gap = sample_with_gap(N, DOMAIN, 1, gap_center=x_star, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=seed)
     x_uniform = sample_uniform(N, DOMAIN, 1, seed=seed)
@@ -286,6 +291,7 @@ def build_gap_and_uniform_datasets(components, x_star, N, gap_radius=0.5, gap_fr
 
 
 def train_tiny_mlp(x_train, y_train, hidden_sizes=(64, 64), activation="tanh", epochs=3000, lr=1e-2, seed=SEED):
+    """Trains a TinyMLP on (x_train, y_train). Returns (model, loss_history)."""
     torch.manual_seed(seed)  # controls model init; must precede construction
     model = TinyMLP(input_dim=x_train.shape[1], hidden_sizes=hidden_sizes, activation=activation)
     model, history = train_regressor(model, x_train, y_train, epochs=epochs, lr=lr, seed=seed)
@@ -349,7 +355,7 @@ def run_main_experiment(N=400, gap_radius=0.5, gap_fraction=0.02, local_radius=0
 
     RESULTS_DIR.mkdir(exist_ok=True)
     fig = plots.plot_gap_vs_uniform(x_grid.squeeze(-1).numpy(), f_star_vals.numpy(), dataset_results, L_star,
-                                     save_path=RESULTS_DIR / "step6_gap_vs_uniform.png")
+                                     save_path=RESULTS_DIR / "step3_gap_vs_uniform.png")
 
     return {"L_star": L_star, "x_star": x_star, "report": report, "dataset_results": dataset_results, "figure": fig}
 
@@ -360,6 +366,7 @@ def run_main_experiment(N=400, gap_radius=0.5, gap_fraction=0.02, local_radius=0
 # ---------------------------------------------------------------------------
 
 def build_tier_a_pl():
+    """The Tier A piecewise-ramp ground truth. Returns (f_star, L_star)."""
     c, half_width, slope = 0.5, 0.3, 9.0
     L_star = piecewise_ramp_true_L(slope)
     f_star = lambda x: piecewise_ramp_f(x, c, half_width, slope)
@@ -420,6 +427,8 @@ def run_cross_architecture_check(N=500, hidden_sizes=(64, 64), epochs=3000, lr=1
 # ---------------------------------------------------------------------------
 
 def _build_dataset(dataset_type, components, x_star, N, gap_radius, gap_fraction, seed):
+    """A single gap- or uniform-sampled dataset from the Tier B ground truth, for one value of N.
+    dataset_type is "gap" or "uniform"."""
     f_star = lambda x: tier_b_f(x, components)
     if dataset_type == "gap":
         x = sample_with_gap(N, DOMAIN, 1, gap_center=x_star, gap_radius=gap_radius, gap_fraction=gap_fraction, seed=seed)
@@ -493,7 +502,7 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
                                                      N_values=N_values, verbose=verbose)
         fig_N = plots.plot_sweep(N_values, L_star, L_hat_data_N, L_hat_model_N, xlabel="N (training samples)",
                                   title=f"L* vs. N ({dataset_type} sampling)",
-                                  save_path=RESULTS_DIR / f"step7_N_sweep_{dataset_type}.png")
+                                  save_path=RESULTS_DIR / f"step4_N_sweep_{dataset_type}.png")
 
         if verbose:
             print(f"\n=== capacity-sweep ({dataset_type}) ===")
@@ -501,14 +510,14 @@ def run_sweeps(N_values=(50, 100, 200, 500, 1000, 2000, 5000), widths=(4, 8, 16,
                                                             widths=widths, N=capacity_N, verbose=verbose)
         fig_w = plots.plot_sweep(widths, L_star, L_hat_data_w, L_hat_model_w, xlabel="hidden width",
                                   title=f"L* vs. model capacity ({dataset_type} sampling, N={capacity_N})",
-                                  save_path=RESULTS_DIR / f"step7_capacity_sweep_{dataset_type}.png")
+                                  save_path=RESULTS_DIR / f"step4_capacity_sweep_{dataset_type}.png")
 
         all_results[dataset_type] = {
             "N_values": np.array(N_values), "L_hat_data_N": L_hat_data_N, "L_hat_model_N": L_hat_model_N,
             "widths": np.array(widths), "L_hat_data_w": L_hat_data_w, "L_hat_model_w": L_hat_model_w,
         }
 
-        np.savez(RESULTS_DIR / f"step7_sweeps_{dataset_type}.npz", L_star=L_star, **all_results[dataset_type])
+        np.savez(RESULTS_DIR / f"step4_sweeps_{dataset_type}.npz", L_star=L_star, **all_results[dataset_type])
 
     return {"L_star": L_star, "results": all_results}
 
@@ -577,11 +586,11 @@ def run_gap_N_sweep_seed_averaged(n_seeds=5, N_values=(50, 100, 200, 500, 1000, 
           f"(mean +/- std across {n_seeds} seeds; L*={L_star:.4f})")
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    np.savez(RESULTS_DIR / "step7_N_sweep_gap_seed_averaged.npz", L_star=L_star, **result)
+    np.savez(RESULTS_DIR / "step5_N_sweep_gap_seed_averaged.npz", L_star=L_star, **result)
     fig = plots.plot_seed_averaged_sweep(
         result, L_star, xlabel="N (training samples)",
         title=f"L* vs. N (gap sampling, {n_seeds}-seed average)",
-        save_path=RESULTS_DIR / "step7_N_sweep_gap_seed_averaged.png")
+        save_path=RESULTS_DIR / "step5_N_sweep_gap_seed_averaged.png")
 
     return {"L_star": L_star, "x_star": x_star, "figure": fig, **result}
 
@@ -626,16 +635,16 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
         model_grad_norm.reshape(shape).numpy(),
         local_lipschitz.reshape(shape).numpy(),
         x_train.numpy(),
-        save_path=RESULTS_DIR / "step8_2d_heatmaps.png",
+        save_path=RESULTS_DIR / "step6_2d_heatmaps.png",
     )
     fig_coverage = plots.plot_coverage_heatmap(
         gg1.numpy(), gg2.numpy(),
         sample_density.reshape(shape).numpy(),
         x_train.numpy(),
-        save_path=RESULTS_DIR / "step8_coverage_heatmap.png",
+        save_path=RESULTS_DIR / "step6_coverage_heatmap.png",
     )
 
-    np.savez(RESULTS_DIR / "step8_2d_results.npz", L_star=L_star, x_star=x_star.numpy(),
+    np.savez(RESULTS_DIR / "step6_2d_results.npz", L_star=L_star, x_star=x_star.numpy(),
              true_grad_norm=true_grad_norm.reshape(shape).numpy(),
              model_grad_norm=model_grad_norm.reshape(shape).numpy(),
              local_lipschitz=local_lipschitz.reshape(shape).numpy(),
@@ -648,6 +657,7 @@ def run_2d_extension(N=800, gap_radius=0.7, gap_fraction=0.03, heatmap_grid_side
 # ---------------------------------------------------------------------------
 
 def main():
+    """Runs every experiment in this module and saves its results."""
     run_tier_a_sanity()
     run_tier_a_gap_demo()
     run_main_experiment()

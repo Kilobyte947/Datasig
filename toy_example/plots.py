@@ -1,4 +1,4 @@
-"""This file contains all plotting functions for the toy Lipschitz experiment."""
+"""This file contains all plotting functions for the Toy Lipschitz experiment."""
 
 import matplotlib.pyplot as plt
 
@@ -72,17 +72,13 @@ def plot_sweep(x_values, L_star, L_hat_data_values, L_hat_model_values, xlabel, 
 
 def plot_seed_averaged_sweep(seed_results, L_star, xlabel="N (training samples)", title=None,
                               spread="std", show_individual_seeds=True, log_x=True, save_path=None):
-    """Seed-averaged N-sweep plot: mean L_hat_model vs. the swept quantity
-    with a shaded spread band, mean L_hat_data for comparison, the L*
-    reference line (same convention as plot_sweep), and optionally faint
-    individual per-seed L_hat_model trajectories. Additive to plot_sweep,
-    which is unchanged and still used for the single-seed sweeps.
-
-    seed_results: dict as returned by sweep_over_N_seed_averaged
-    (N_values, seeds, L_hat_data/model_mean/std/min/max,
-    L_hat_data/model_per_seed).
-    spread: "std" for a +-1 std band, "minmax" for a min/max band.
-    """
+    """Seed-averaged N-sweep plot: mean L_hat_model vs the swept quantity with a shaded spread band,
+    mean L_hat_data for comparison, the L* reference line, and optionally faint individual per-seed
+    L_hat_model trajectories.
+    
+    seed_results: dict as returned by sweep_over_N_seed_averaged (N_values, seeds, L_hat_data/
+    model_mean/std/min/max, L_hat_data/model_per_seed). spread: "std" for a +-1 std band, "minmax"
+    for a min/max band."""
     x_values = seed_results["N_values"]
     mean_model = seed_results["L_hat_model_mean"]
     mean_data = seed_results["L_hat_data_mean"]
@@ -205,17 +201,11 @@ def plot_degree_sweep(degrees, errors, cond_numbers, save_path=None):
 
 
 def plot_presentation_gap_effect(x_grid, dataset_results, L_star, save_path=None):
-    """Presentation figure: the project's core finding on one axis - the
-    trained model's local Lipschitz estimate vs. x, gap-sampled vs.
-    uniformly-sampled, with L* marked and the two peak values labeled
-    directly. Single y-axis (no dual-axis), thicker lines and larger text
-    than the notebook's exploratory version, for use on a slide.
-
-    x_grid: (M,) 1D grid. dataset_results: dict with keys "gap"/"uniform",
-    each holding "local_lipschitz_vals" (M,) - same shape produced by
-    run_tier_a_gap_demo/run_main_experiment. L_star: true global Lipschitz
-    constant.
-    """
+    """Presentation figure: the trained model's local Lipschitz estimate vs x, gap-sampled vs 
+    uniformly-sampled, with L* marked and the two peak values labeled directly.
+    
+    x_grid: (M,) 1D grid. dataset_results: dict with keys "gap"/"uniform", each holding 
+    "local_lipschitz_vals" (M,). L_star: true global Lipschitz constant."""
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ax.axhline(L_star, color="black", linestyle="--", linewidth=2)
     ax.annotate(f"L* = {L_star:.1f}", xy=(float(x_grid[-1]), L_star), xytext=(-4, 6),

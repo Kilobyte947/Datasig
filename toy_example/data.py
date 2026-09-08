@@ -1,7 +1,6 @@
-"""This file defines how training points get sampled, and how densely they cover a region (local_sample_density)."""
+"""Training-point sampling, and a local coverage check (local_sample_density)."""
 
 import torch
-
 torch.set_default_dtype(torch.float64)
 
 def _generator(seed):
@@ -30,6 +29,9 @@ def sample_uniform(N, domain, d, seed=None):
 
 
 def _rejection_sample(n_needed, domain, d, gap_center, gap_radius, inside_gap, generator, max_attempts=10000):
+    """n_needed points drawn uniformly from domain, kept only if they fall inside or outside the
+    gap_radius ball around gap_center, as given by inside_gap. 
+    Raises RuntimeError if max_attempts is exhausted first."""
     lo, hi = domain
     gap_center = torch.as_tensor(gap_center, dtype=torch.get_default_dtype()).reshape(d)
     collected = []
@@ -57,12 +59,8 @@ def _rejection_sample(n_needed, domain, d, gap_center, gap_radius, inside_gap, g
 
 
 def sample_with_gap(N, domain, d, gap_center, gap_radius, gap_fraction, seed=None):
-    """Deliberately starve a region of training data. Picks a ball of `gap_radius` around `gap_center` 
-    (usually f*'s steepest point, since that's where starving data should hurt most) 
-    and samples so only `gap_fraction` of the N points land inside it, the rest scattered uniformly outside. 
-    Implemented via rejection sampling - draw a random point, keep it if it's on the correct side (inside/outside the ball) 
-    for what's still needed, discard and retry otherwise. 
-    """   
+    """Deliberately starves a ball of gap_radius around gap_center of training data, so only
+    gap_fraction of the N points land inside it. Implemented via rejection sampling.""" 
     generator = _generator(seed)
     n_gap = int(round(N * gap_fraction))
     n_outside = N - n_gap
@@ -87,10 +85,9 @@ def make_dataset(f_star, x):
 
 
 def local_sample_density(x_query, x_train, radius, norm="l2"):
-    """This is not a Lipschitz quantity. It is a convergence coverage check (a count).
-    For each query point, count training points within `radius` (per `norm`).
-    A low local Lipschitz estimate can mean "genuinely smooth here" or  just "barely sampled here," and this is what tells the two apart.
-    """
+    """For each query point, the count of training points within radius. Not a Lipschitz quantity —
+    a coverage check, since a low local Lipschitz estimate can mean either genuine smoothness or
+    sparse sampling, and this is what distinguishes the two."""
     x_query = _as_tensor(x_query)
     x_train = _as_tensor(x_train)
     diff = x_query.unsqueeze(1) - x_train.unsqueeze(0)  # (Q, N, d)

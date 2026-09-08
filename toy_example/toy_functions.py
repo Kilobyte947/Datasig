@@ -5,24 +5,20 @@ Tier B: a sum of such ridges, whose true Lipschitz constant has no closed form (
 """
 
 import torch
-
 torch.set_default_dtype(torch.float64)
-
 
 def _as_tensor(v):
     return torch.as_tensor(v, dtype=torch.get_default_dtype())
 
-
 def tier_a_f(x, w, b, A):
-    # f*(x) = A * tanh(w^T x + b), where x: (..., d), w: (d,)
+    """f*(x) = A * tanh(w^T x + b). x is (..., d), w is (d,)."""
     x = _as_tensor(x)
     w = _as_tensor(w)
     z = (x * w).sum(dim=-1) + b
     return A * torch.tanh(z)
 
-
 def tier_a_grad(x, w, b, A):
-    # Analytic gradient: A * w * (1 - tanh(w^T x + b)^2). Shape (..., d).
+    """Analytic gradient of tier_a_f: A * w * (1 - tanh(w^T x + b)^2). Shape (..., d)."""
     x = _as_tensor(x)
     w = _as_tensor(w)
     z = (x * w).sum(dim=-1) + b
@@ -46,7 +42,7 @@ def tier_a_true_L(w, A, norm="l2"):
 
 
 def tier_b_f(x, components):
-    # f*(x) = sum_k A_k * tanh(w_k^T x + b_k). components: list of dicts {"w":..., "b":..., "A":...}
+    """f*(x) = sum_k A_k * tanh(w_k^T x + b_k). components: list of dicts {"w":..., "b":..., "A":...}"""
     total = 0.0
     for c in components:
         total = total + tier_a_f(x, c["w"], c["b"], c["A"])
@@ -54,7 +50,7 @@ def tier_b_f(x, components):
 
 
 def tier_b_grad(x, components):
-    # Analytic gradient via linearity of the sum. Shape (..., d).
+    """Analytic gradient of tier_b_f: sum_k A_k * w_k * (1 - tanh(w_k^T x + b_k)^2). Shape (..., d)."""
     total = None
     for c in components:
         g = tier_a_grad(x, c["w"], c["b"], c["A"])
@@ -63,6 +59,8 @@ def tier_b_grad(x, components):
 
 
 def _grad_norm(g, norm):
+    """Gradient norm matching the given distance norm — L2 for norm="l2", L-infinity (the dual of 
+    L1) for norm="l1"."""
     if norm == "l2":
         return g.norm(p=2, dim=-1)
     elif norm == "l1":
@@ -72,6 +70,7 @@ def _grad_norm(g, norm):
 
 
 def _dense_grid(domain, d, grid_points):
+    """A dense grid of grid_points points over domain, in 1 or 2 dimensions."""
     lo, hi = domain
     if d == 1:
         xs = torch.linspace(lo, hi, grid_points).unsqueeze(-1)
@@ -131,10 +130,9 @@ def tier_b_true_L(components, domain, norm="l2", grid_points=200000, n_restarts=
     return best_L, best_x
 
 def piecewise_ramp_f(x, c, half_width, slope):
-    """A single 1D piecewise-linear ramp: flat at 0, then rises linearly with `slope` over [c - half_width, c + half_width], then flat at slope * (2*half_width). 
-    Closed-form Lipschitz constant is exactly |slope| -- the piecewise-linear analogue of tier_a_f's single tanh ridge, used to test model recovery when f*'s functional form is
-    genuinely piecewise-linear (matching a ReLU network) rather than smooth (matching tanh). d=1 only.
-    """
+    """A single 1D piecewise-linear ramp: flat, then rises linearly with slope over 
+    [c - half_width, c + half_width], then flat again. Exact Lipschitz constant is |slope|. 
+    Tests model recovery when f* is piecewise-linear rather than smooth. d=1 only."""
     x = _as_tensor(x).reshape(-1)
     lo, hi = c - half_width, c + half_width
     ramp_height = slope * (2 * half_width)
@@ -142,5 +140,5 @@ def piecewise_ramp_f(x, c, half_width, slope):
     return y
 
 def piecewise_ramp_true_L(slope):
-    # Closed-form: the Lipschitz constant of a single ramp is exactly |slope|, attained everywhere inside the ramp region.
+    """The exact Lipschitz constant of a single ramp: |slope|."""
     return abs(slope)
