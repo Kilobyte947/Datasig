@@ -1,32 +1,6 @@
-"""Multi-seed confirmation sweep for the CNN-width adversarial comparison.
-
-`run_experiment.run_cnn_adversarial_width_sweep`'s single-seed run found an apparent inversion:
-width=64 has a larger `L_full_estimated` than width=32 and PGD achieves more absolute logit
-movement against it, yet width=32 shows a HIGHER misclassification rate at matched epsilon. This
-module tests whether that inversion survives reseeding, and captures the diagnostics needed to
-identify WHICH mechanism produces it -- logit scale (`clean_logit_stats`), the margin functional's
-own Lipschitz constant (`margin_lipschitz_estimate`), or attack-direction alignment
-(`flip_direction_alignment`), all three added to `run_experiment.py` for exactly this purpose.
-
-**Additive only**: nothing here changes any existing function's signature or behavior in
-`run_experiment.py`, `attacks.py`, `plots.py`, or `layer_decomposition.py`.
-
-**Known limitation** (state this in any write-up of the results): `run_seed_sweep` reseeds
-`train_seed` and `attack_seed` TOGETHER (both set to the run index `s`), so a null result from
-this sweep alone cannot distinguish "the inversion doesn't replicate because the MODEL differs
-across seeds" from "...because the ATTACK/ESTIMATOR sampling differs across seeds."
-`run_attack_seed_variance_decomposition` (Checkpoint 6, optional, run last) recovers that
-decomposition cheaply by holding `train_seed` fixed and varying only `attack_seed`, reusing the
-already-trained checkpoints.
-
-**Statistical framing**: with 5 seeds, a paired sign test reaches at best p ~ 0.06 -- report
-findings as "consistent in k of 5 seeds," never as "significant."
-
-**Compute**: 5 seeds x 3 widths = 15 trainings, each with a 5-epsilon x 2-method attack grid,
-measured under 2 metrics, plus one Mahalanobis SVD -- roughly an order of magnitude above the
-main notebook's ~10 minutes on CPU. Intended to run on a GPU cluster (e.g. via a SLURM array job
-over `(train_seed, width)`, with aggregation as a separate serial step over the written CSVs), not
-inline in a notebook cell.
+"""Multi-seed confirmation sweep for the CNN-width adversarial comparison, checking whether the
+width-32/width-64 misclassification-rate inversion found in run_experiment.py survives reseeding,
+and which mechanism explains it: logit scale, margin Lipschitz constant, or attack-direction alignment.
 """
 
 from pathlib import Path
@@ -55,9 +29,7 @@ CHECKPOINT_DIR = RESULTS_DIR / "seed_sweep_checkpoints"
 
 
 def _checkpoint_path(checkpoint_dir, train_seed, width):
-    """`None` in, `None` out -- the "don't touch disk, always retrain" escape hatch used by the
-    seeding-discipline tests in `tests/test_adversarial_mahalanobis.py`, which need two independent trainings
-    with NO caching in between to prove determinism isn't coming from a stale cache hit."""
+    """Checkpoint file path for (train_seed, width), or None if checkpoint_dir is None."""
     if checkpoint_dir is None:
         return None
     return Path(checkpoint_dir) / f"train_seed{train_seed}_width{width}.pt"
@@ -65,26 +37,9 @@ def _checkpoint_path(checkpoint_dir, train_seed, width):
 
 def train_or_load_checkpoint(train_seed, width, epochs=6, train_subset_size=5000,
                               checkpoint_dir=CHECKPOINT_DIR, verbose=True):
-    """Loads a cached `SmallCNN(conv_channels=(width, 2*width))` checkpoint keyed by
-    `(train_seed, width)` from `checkpoint_dir` if present, else trains one and saves it.
-
-    This is the ONLY place training happens in this module, and it takes `train_seed` alone --
-    no `attack_seed` parameter exists here at all, so "attack_seed cannot influence training" is
-    true by construction, not just by convention (see `run_single_seed_width`'s seeding-discipline
-    docstring, and the direct checks in `tests/test_adversarial_mahalanobis.py`).
-
-    Lets `run_seed_sweep` call `run_single_seed_width` once per `(train_seed, width)` for BOTH
-    metrics without retraining the second time (see `run_single_seed_width`'s docstring for why
-    this still gives bit-identical adversarial examples across metrics despite not literally
-    caching `x_adv`), and lets an interrupted `run_seed_sweep` resume without redoing
-    already-completed trainings -- this project's `SmallCNN` trainings are the dominant cost of
-    the whole sweep (see this module's top docstring).
-
-    Data loading (`train`/`test`) always happens regardless of cache hit/miss -- cheap relative to
-    training, and needed either way for the caller's query/pool-point sampling.
-
-    Returns `(model, train, test, train_acc, test_acc)`.
-    """
+    """Loads a cached SmallCNN checkpoint for (train_seed, width) if one exists, else trains and 
+    saves one. Takes train_seed only — attack_seed never influences training. 
+    Returns (model, train, test, train_acc, test_acc)."""
     path = _checkpoint_path(checkpoint_dir, train_seed, width)
     train = load_mnist(train=True)
     test = load_mnist(train=False)
@@ -124,57 +79,15 @@ def run_single_seed_width(train_seed, attack_seed, width, distance_fn,
                            epsilons=DEFAULT_EPSILONS, pgd_alpha_frac=0.25, pgd_num_steps=20,
                            pgd_num_restarts=5, max_pairs=None, margin_estimator="pairwise",
                            checkpoint_dir=CHECKPOINT_DIR, metric_name="Euclidean", verbose=True):
-    """One `(train_seed, attack_seed, width, distance_fn)` run of the full measurement battery.
-
-    Trains (or loads a cached checkpoint for) one `SmallCNN` at `width` via
-    `train_or_load_checkpoint`, runs the epsilon x method attack grid against it, and returns one
-    row per `(epsilon, method)` carrying every existing bound/`R_adv` column (matching
-    `run_bound_comparison_with_distance_fn`'s own columns) PLUS the mechanism diagnostics added to
-    `run_experiment.py` for this sweep (`adversarial_accuracy`, `clean_logit_stats`,
-    `margin_lipschitz_estimate`, `flip_direction_alignment`).
-
-    **Seeding discipline (load-bearing)**: `train_seed` controls ONLY the model's initialization
-    and training-data shuffling (via `train_or_load_checkpoint`, which doesn't even accept an
-    attack_seed parameter); `attack_seed` controls ONLY query/pool/norm-point sampling and the
-    attack/estimator randomness (PGD restarts, `pairwise_lipschitz`'s `max_pairs` subsampling).
-    The two are NEVER derived from one another. This decomposition is load-bearing for this
-    project's existing determinism guarantee (`tests/test_adversarial_mahalanobis.py`'s retraining-determinism
-    check, and the design decision that the Mahalanobis half reuses bit-identical checkpoints and
-    adversarial examples, see `run_experiment.py`'s adversarial README) -- collapsing the two
-    seeds back into one would break it. Checked directly in `tests/test_adversarial_mahalanobis.py`'s
-    seeding-discipline tests, not just asserted here.
-
-    `distance_fn`: a single ALREADY-FITTED distance function (plain Euclidean, or a Mahalanobis
-    `distance_fn` from `run_experiment.build_pixel_mahalanobis_distance_fn`) -- fit ONCE by the
-    caller (`run_seed_sweep`) and passed in, never refit here: the Mahalanobis precision matrix is
-    a property of the DATA, not of this run, and refitting it per `(seed, width)` call would be
-    the dominant avoidable cost of the whole sweep. `metric_name`: only labels the returned rows
-    (`"Euclidean"`/`"Mahalanobis"`), never selects behavior.
-
-    **Model/attack reuse across metrics**: calling this function twice with the same
-    `train_seed`/`width` but different `distance_fn` loads the SAME cached weights the second time
-    (via `train_or_load_checkpoint`) rather than retraining. Since attacks
-    (`fgsm_attack`/`pgd_attack`, via `run_epsilon_sweep`) depend only on the model and
-    `attack_seed` -- never on `distance_fn` -- the two calls also generate BIT-IDENTICAL `x_adv`
-    tensors, exactly the same determinism `run_bound_comparison_with_distance_fn` already relies
-    on; only how sensitivity is MEASURED differs. `x_adv` is recomputed (not literally cached)
-    across the two calls, since PGD/FGSM on ~500 points is cheap relative to training a CNN --
-    the caching effort goes toward the expensive part (training), not the cheap deterministic one.
-
-    Returns a `pd.DataFrame`, one row per `(epsilon, method)`, with columns: `train_seed`,
-    `attack_seed`, `width`, `metric`, `train_acc`, `test_acc`, plus everything
-    `summarize_epsilon_sweep` returns (`epsilon`, `method`, `mean_R_adv`, `median_R_adv`,
-    `max_R_adv`, `pct_misclassified`, `L_full_estimated`, `product_bound`, `ratio_to_L_full`,
-    `ratio_to_product_bound`), `L_head_exact`, `L_extractor_estimated`, `looseness_ratio`,
-    `L_margin_estimated` (kept as its own column, never merged with `L_full_estimated` -- see
-    `margin_lipschitz_estimate`'s docstring), the checkpoint-level `clean_logit_stats` columns
-    (repeated across every row of this checkpoint, same convention `summarize_epsilon_sweep`
-    already uses for `L_full_estimated`/`product_bound`), and the per-`(epsilon, method)`
-    `n_flipped`/`n_evaluated`/`mean_cosine_alignment`/`std_cosine_alignment` columns
-    (`pct_misclassified` from `summarize_epsilon_sweep` already equals
-    `adversarial_accuracy`'s `misclassification_rate` for the same points, so only its extra
-    columns are added here, not a duplicate).
-    """
+    """Runs the full measurement battery for one (train_seed, attack_seed, width, distance_fn)
+    combination: trains or loads the checkpoint, runs the epsilon x method attack grid, and computes 
+    every bound, R_adv, and mechanism diagnostic (logit stats, margin Lipschitz estimate, direction alignment).
+    
+    train_seed controls only model init and training-data order; attack_seed controls only
+    query/pool sampling and attack randomness — the two are never derived from each other. distance_fn 
+    must already be fitted; it's never refit here.
+    
+    Returns one row per (epsilon, method), covering both the bound/R_adv columns and the mechanism diagnostics."""
     model, train, test, train_acc, test_acc = train_or_load_checkpoint(
         train_seed, width, epochs=epochs, train_subset_size=train_subset_size,
         checkpoint_dir=checkpoint_dir, verbose=verbose)
@@ -226,11 +139,6 @@ def run_single_seed_width(train_seed, attack_seed, width, distance_fn,
             "looseness_ratio": bound_result["looseness_ratio"],
             "L_margin_estimated": L_margin_estimated,
             **logit_stats,
-            # Alias of summary_row["pct_misclassified"] under the name summarize_seed_sweep's
-            # paired_differences (Checkpoint 4) expects -- both are adversarial_accuracy's/
-            # summarize_epsilon_sweep's identical flip-rate quantity for the same points, kept as
-            # two names deliberately rather than requiring downstream aggregation code to know
-            # they're the same column.
             "misclassification_rate": acc_stats["misclassification_rate"],
             "n_flipped": acc_stats["n_flipped"],
             "n_evaluated": acc_stats["n_evaluated"],
@@ -248,24 +156,14 @@ def run_seed_sweep(seeds=range(5), widths=(16, 32, 64), maha_fit_size=60000,
                     pgd_num_steps=20, pgd_num_restarts=5, max_pairs=None,
                     margin_estimator="pairwise", checkpoint_dir=CHECKPOINT_DIR,
                     verbose=True, save_path=RESULTS_DIR / "seed_sweep_raw.csv"):
-    """Repeats `run_single_seed_width` across every `(seed, width, metric)` combination -- the
-    reseeding check for the single-seed width-32/width-64 misclassification-rate inversion (see
-    this module's top docstring).
-
-    The Mahalanobis precision matrix is fit ONCE, from `maha_fit_size` training points (default
-    the full 60k training set, matching `build_pixel_mahalanobis_distance_fn`'s own "fit on the
-    full training set" convention), not per `(seed, width)` -- see `run_single_seed_width`'s
-    docstring for why refitting it repeatedly would dominate the sweep's cost.
-
-    Both `train_seed` and `attack_seed` are set to the SAME run index `s`, for every `s` in
-    `seeds` (see this module's top-level "Known limitation" docstring for what this does and
-    doesn't let you conclude from a null result).
-
-    Returns a long-format `pd.DataFrame` keyed by `(seed, width, epsilon, method, metric)`: the
-    concatenation of every `run_single_seed_width` call's rows, with `train_seed` renamed to
-    `seed` (since `train_seed == attack_seed` throughout this sweep, by construction above) and
-    `attack_seed` dropped as redundant. Also written to `save_path` as CSV (`None` to skip saving).
-    """
+    """Runs the full measurement battery for one (train_seed, attack_seed, width, distance_fn) combination: 
+    trains or loads the checkpoint, runs the epsilon x method attack grid, and computes 
+    every bound, R_adv, and mechanism diagnostic (logit stats, margin Lipschitz estimate, direction alignment).
+    
+    train_seed controls only model init and training-data order; attack_seed controls only 
+    query/pool sampling and attack randomness. The two are never derived from one another.
+    
+    Returns one row per (epsilon, method), covering both the bound/R_adv columns and the mechanism diagnostics."""
     train = load_mnist(train=True)
     if verbose:
         print(f"Fitting Mahalanobis precision matrix once from {maha_fit_size} training points...")
@@ -299,14 +197,6 @@ def run_seed_sweep(seeds=range(5), widths=(16, 32, 64), maha_fit_size=60000,
 
     return combined
 
-
-# ---------------------------------------------------------------------------
-# Aggregation (Checkpoint 4): turns run_seed_sweep's long, per-(seed, width, epsilon, method,
-# metric) raw frame into the three tables the width-32/width-64 inversion question actually needs
-# answered: does it hold up on average (per_config), does its SIGN replicate across seeds
-# (paired_differences), and which mechanism explains it (mechanism_table)?
-# ---------------------------------------------------------------------------
-
 PAIRED_DIFF_QUANTITIES = ("misclassification_rate", "L_full_estimated", "max_R_adv",
                            "mean_top2_margin", "mean_logit_norm")
 
@@ -325,42 +215,14 @@ def _sign(value):
 
 
 def summarize_seed_sweep(df, width_pairs=DEFAULT_WIDTH_PAIRS, reference_seed=None, save_dir=RESULTS_DIR):
-    """Aggregates `run_seed_sweep`'s long-format raw frame into three tables.
+    """Aggregates run_seed_sweep's raw output into three tables: per_config, paired_differences, 
+    and mechanism_table. reference_seed defaults to the smallest seed present. Also saved as CSV if save_dir is set.
+    
+    Note on paired_differences: pairing is by seed index only. A shared seed gives two widths the 
+    same data order and attack randomness, but not the same model initialisation, since SmallCNN's
+    random init also depends on width — so this is a partial pairing, not a true matched-pairs
+    design. Report replication as "consistent in k of n seeds," never as statistically significant."""
 
-    `reference_seed`: which seed's sign counts as "the single-seed finding" `paired_differences`
-    checks replication against -- defaults to the smallest seed present in `df` (this project's
-    convention is `seed=0` as the default/original single-seed run everywhere else, so the
-    smallest seed in a `run_seed_sweep(seeds=range(...))` call is exactly that original run).
-
-    Returns `{"per_config", "paired_differences", "mechanism_table"}`:
-
-    - **`per_config`**: mean/std/min/max across seeds of every numeric column (except `seed`
-      itself), grouped by `(width, epsilon, method, metric)` -- one row per config, columns named
-      `{original_column}_{mean,std,min,max}`.
-
-    - **`paired_differences`**: for each `(epsilon, method, metric)` and each `(width_low,
-      width_high)` pair in `width_pairs`, and each quantity in `PAIRED_DIFF_QUANTITIES`
-      (`misclassification_rate`, `L_full_estimated`, `max_R_adv`, `mean_top2_margin`,
-      `mean_logit_norm`): the per-seed difference `value(width_low) - value(width_high)`,
-      summarized as `mean_diff`, `std_diff`, `n_seeds`, `reference_sign` (the sign of that
-      difference at `reference_seed`), and `k_matching_sign` (how many of the `n_seeds` seeds --
-      INCLUDING `reference_seed` itself -- have that same sign). Report findings as "consistent
-      in k of n_seeds seeds," per this module's top-docstring statistical-framing note, never as
-      "significant." Pairing is by seed index only -- a shared seed gives different widths the
-      SAME data ordering/attack randomness, but NOT the same model initialization (SmallCNN's
-      random init depends on `width` too), so this pairing is partial, not a true matched-pairs
-      design; stated here so it isn't overclaimed downstream.
-
-    - **`mechanism_table`**: for each `(width, metric)`, the across-seed mean +/- std of
-      `MECHANISM_TABLE_COLUMNS` (`mean_logit_norm`, `mean_top2_margin`, `L_full_estimated`,
-      `L_margin_estimated`, `mean_cosine_alignment`) -- the table that adjudicates between the
-      three candidate mechanisms (logit scale, margin-functional Lipschitz constant, attack-
-      direction alignment). Each column is first averaged WITHIN a seed across that seed's
-      `(epsilon, method)` rows (a no-op for the checkpoint-level columns, which are already
-      constant within a seed -- see `run_single_seed_width`'s docstring -- and a genuine average
-      over attack conditions for `mean_cosine_alignment`, which is not checkpoint-level), then
-      mean/std is taken ACROSS seeds of that per-seed value.
-    """
     if reference_seed is None:
         reference_seed = int(df["seed"].min())
 
@@ -418,18 +280,6 @@ def summarize_seed_sweep(df, width_pairs=DEFAULT_WIDTH_PAIRS, reference_seed=Non
     return result
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint 6 (OPTIONAL, run LAST) -- variance decomposition.
-#
-# NOT wired into run_seed_sweep or any main()-equivalent -- deliberately opt-in, matching this
-# project's convention that markedly slower/exploratory sweep functions are called directly, not
-# auto-included in a driver (see toy_example.run_experiment.run_gap_N_sweep_seed_averaged for
-# the same convention applied elsewhere in this codebase). Only worth running if
-# summarize_seed_sweep's paired_differences/per_config output (Checkpoint 4) shows the
-# width-32/width-64 inversion is inconsistent across seeds, or the spread on L_full_estimated
-# looks large relative to the width-32/width-64 gap being tested.
-# ---------------------------------------------------------------------------
-
 def run_attack_seed_variance_decomposition(
         widths=(16, 32, 64), attack_seeds=(0, 1, 2), train_seed=0,
         maha_fit_size=60000, maha_epsilon=MAHALANOBIS_EPSILON, epochs=6, train_subset_size=5000,
@@ -437,27 +287,9 @@ def run_attack_seed_variance_decomposition(
         epsilons=DEFAULT_EPSILONS, pgd_alpha_frac=0.25, pgd_num_steps=20, pgd_num_restarts=5,
         max_pairs=None, margin_estimator="pairwise", checkpoint_dir=CHECKPOINT_DIR, verbose=True,
         save_path=RESULTS_DIR / "seed_sweep_attack_seed_variance.csv"):
-    """Decomposes `run_seed_sweep`'s total across-seed spread into measurement/attack noise vs.
-    model-to-model variation (see this module's top-docstring "Known limitation").
-
-    `run_seed_sweep` reseeds `train_seed` and `attack_seed` TOGETHER, so its
-    `per_config`/`paired_differences` spread conflates two different sources of variation: the
-    MODEL changing across seeds (different init/training-data order), and the ATTACK/ESTIMATOR
-    sampling changing across seeds (different query/pool points, different PGD restarts) even for
-    an IDENTICAL model. This function isolates the second source alone: `train_seed` is held FIXED
-    (default 0) across every call here, so every run at a given width should reuse the SAME
-    already-trained checkpoint (via `train_or_load_checkpoint`'s cache -- genuinely "no
-    retraining" only if that checkpoint already exists on disk under `checkpoint_dir` from a prior
-    `run_seed_sweep` call with the SAME `train_seed`/training config; a cache miss falls back to
-    training it, just without the intended cost savings), while `attack_seed` varies over
-    `attack_seeds`.
-
-    Returns a long-format `pd.DataFrame`, same column shape as `run_seed_sweep`'s output (`width`,
-    `metric`, `epsilon`, `method`, ...) but with `attack_seed` as the varying dimension and
-    `train_seed` constant throughout (both kept as separate columns here, unlike
-    `run_seed_sweep`'s collapsed `seed` column, since the two are deliberately NOT equal in this
-    sweep). Also written to `save_path` as CSV (`None` to skip saving).
-    """
+    """Isolates attack/estimator noise from model-to-model variation: holds train_seed fixed and 
+    varies only attack_seed, reusing the same trained checkpoint at each width. Returns a long-format
+    DataFrame with train_seed and attack_seed as separate columns, also saved to save_path as CSV."""
     train = load_mnist(train=True)
     if verbose:
         print(f"Fitting Mahalanobis precision matrix once from {maha_fit_size} training points...")

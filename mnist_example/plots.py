@@ -1,6 +1,5 @@
 """All plotting functions for the MNIST Lipschitz experiment. 
 Every function returns the created `matplotlib.figure.Figure` and optionally saves it to `save_path`. 
-No plotting logic should live anywhere else -- matches toy_example/plots.py's convention.
 """
 
 import matplotlib.pyplot as plt
@@ -10,13 +9,13 @@ MODEL_ORDER = ("logistic_regression", "mlp", "cnn")
 MODEL_LABELS = {"logistic_regression": "Logistic\nRegression", "mlp": "MLP", "cnn": "CNN"}
 
 def _maybe_save(fig, save_path):
+    """Save the figure to `save_path` if given"""
     if save_path is not None:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
 
 def plot_euclidean_vs_mahalanobis(euclidean_results, mahalanobis_results, save_path=None):
-    """Three models x three sub-methods x two metrics (Euclidean, Mahalanobis)"""
-
+    """Bar chart of the three sub-method Lipschitz estimates, one panel per model, on a log scale."""
     submethods = [("pairwise", "Pairwise"), ("local_max", "Local-perturbation (max)"), ("grad_max", "Gradient-norm (max)")]
     models = [m for m in MODEL_ORDER if m in euclidean_results]
 
@@ -44,7 +43,7 @@ def plot_euclidean_vs_mahalanobis(euclidean_results, mahalanobis_results, save_p
 
 
 def plot_epsilon_sweep(epsilon_values, cond_numbers, cv_values, selected_epsilon=None, save_path=None):
-    """Condition number and subsample instability (coefficient of variation) both plotted against epsilon (log scale)"""
+    """Condition number and subsample coefficient of variation against epsilon, on a log-log scale, with the selected epsilon marked."""
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.plot(epsilon_values, cond_numbers, marker="o", color="blue", label="cond(Sigma + eps*I)")
     ax.set_xscale("log")
@@ -71,9 +70,7 @@ def plot_epsilon_sweep(epsilon_values, cond_numbers, cv_values, selected_epsilon
 
 
 def plot_submethod_agreement(results, metric_name, save_path=None):
-    """For each model, show the three sub-method estimates side by side on a log y-axis (the three live on very different natural scales).
-    The validity check made visible, given there's no L* to plot as a reference line here."""
-
+    """Bar chart of the three sub-method Lipschitz estimates, one panel per model, on a log scale."""
     models = [m for m in MODEL_ORDER if m in results]
     submethod_keys = ["pairwise", "local_max", "grad_max"]
     submethod_labels = ["pairwise", "local-pert.", "grad-norm"]
@@ -98,11 +95,7 @@ def plot_submethod_agreement(results, metric_name, save_path=None):
 
 
 def plot_covariance_eigenvalues(eigenvalues, epsilon=None, save_path=None):
-    """Eigenvalue spectrum of the pixel covariance matrix, optionally with epsilon-regularized version overlaid.
-    If `epsilon` is given, also plots the ridge-regularized spectrum `eigenvalues + epsilon` (same eigenvectors 
-    as Sigma, just a uniform shift) so it's directly visible how much epsilon lifts the near-zero tail while 
-    barely touching the large eigenvalues.
-    """
+    """Eigenvalue spectrum of the pixel covariance matrix, log scale, optionally showing the epsilon-regularised spectrum alongside."""
     eigenvalues = eigenvalues.detach().cpu().numpy() if hasattr(eigenvalues, "detach") else np.asarray(eigenvalues)
     eigenvalues_plot = np.clip(eigenvalues, a_min=1e-12, a_max=None)  # avoid log(0)/log(negative) from fp noise
     index = np.arange(1, len(eigenvalues) + 1)
@@ -126,7 +119,7 @@ def plot_covariance_eigenvalues(eigenvalues, epsilon=None, save_path=None):
 
 
 def plot_ratio_distribution(ratio_dist_results, metric_name="Euclidean", save_path=None):
-    """For each model, show the distribution of pairwise ratios for all pairs vs. nearest-neighbor pairs, side by side."""
+    """Histogram of the pairwise ratio distribution, all pairs vs nearest-neighbour pairs, one panel per model."""
     models = [m for m in MODEL_ORDER if m in ratio_dist_results]
     fig, axes = plt.subplots(1, len(models), figsize=(6 * len(models), 5), sharey=True)
     if len(models) == 1:
@@ -152,8 +145,8 @@ def plot_ratio_distribution(ratio_dist_results, metric_name="Euclidean", save_pa
 
 
 def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, mahalanobis_ratio_results, save_path=None):
-    """Grouped bar chart comparing the three summary statistics of the pairwise ratio distribution (mean of all pairs, mean of nearest-neighbor pairs, 
-    max of nearest-neighbor pairs) for each model and each of the two distance metrics (Euclidean, Mahalanobis)."""
+    """Grouped bar chart comparing all-pairs mean, near-neighbour mean, and near-neighbour max ratio,
+    under Euclidean vs Mahalanobis distance, per model."""
     stats = [("all_pairs_mean", "All-pairs mean ratio"),
              ("near_neighbor_mean", "Near-neighbor mean ratio"),
              ("near_neighbor_max", "Near-neighbor max ratio")]
@@ -183,12 +176,8 @@ def plot_ratio_distribution_euclidean_vs_mahalanobis(euclidean_ratio_results, ma
 
 
 def plot_image_pairs(pairs, save_path=None):
-    """Given a list of image pairs and their associated true/predicted labels and pairwise Lipschitz ratio, plot the first 6 pairs in a grid."""
+    """Grid of up to 6 image pairs with true/predicted labels and their pairwise Lipschitz ratio."""
     n = min(len(pairs), 6)
-    # figsize/dpi chosen for a compact inline notebook rendering (a 6-pair
-    # gallery at the old figsize=(5, 2.5*n) with no explicit dpi ran to
-    # ~15in tall on screen) -- savefig below still writes a crisp dpi=150
-    # PNG regardless of this figure's own (lower) on-screen dpi.
     fig, axes = plt.subplots(n, 2, figsize=(4, 1.8 * n), dpi=80)
     axes = np.atleast_2d(axes)
 
@@ -208,28 +197,10 @@ def plot_image_pairs(pairs, save_path=None):
 
 
 def plot_pair_diagnostic_gallery(pairs, title=None, save_path=None):
-    """Diagnostic gallery for a hand-picked list of image pairs: extends
-    `plot_image_pairs`'s image + true/pred + ratio format with a third
-    panel per row showing the pixel-level absolute difference between the
-    pair, on its own color scale so a small difference is still visible
-    (not squashed to near-black against the [0,1] image range) -- built to
-    visually rule out a data/preprocessing artefact (near-duplicate
-    images, a normalization bug, an indexing bug pairing a point with
-    itself or a corrupted copy) before treating a high-ratio pair as a
-    genuine model-confusion finding.
-
-    `pairs`: list of dicts, each with `img1`/`img2` (flat 784 or (28,28)
-    arrays), `true1`/`pred1`/`true2`/`pred2`, `ratio`/`dist`/`margin_diff`,
-    and optionally `confidence1`/`confidence2` (softmax probability of the
-    predicted class) -- included in the label when present; omitted
-    (rather than shown as a fabricated number) when not, e.g. when no
-    trained-model checkpoint was available to compute them.
-    """
+    """For each pair, the two images side by side with labels and confidence, plus a pixel-difference
+    heatmap and the ratio/distance/margin values."""
     n = len(pairs)
-    # figsize/dpi chosen for a compact inline notebook rendering (a 6-pair
-    # gallery at the old figsize=(8, 2.6*n) with no explicit dpi ran to
-    # ~15.6in tall on screen) -- savefig below still writes a crisp dpi=150
-    # PNG regardless of this figure's own (lower) on-screen dpi.
+
     fig, axes = plt.subplots(n, 3, figsize=(6, 1.8 * n), dpi=80)
     axes = np.atleast_2d(axes)
 
@@ -263,18 +234,9 @@ def plot_pair_diagnostic_gallery(pairs, title=None, save_path=None):
 
 
 def plot_umap_embedding_scatter(embedded_2d, labels, title=None, save_path=None):
-    """2D scatter of a UMAP embedding, colored by true digit label -- the
-    validation check `notebook_distance_measures.ipynb`'s UMAP section runs before trusting UMAP as a
-    distance metric: visible per-digit clustering supports treating
-    embedded-space distance as locality-preserving, a scattered/mixed
-    result means don't trust it further.
-
-    `embedded_2d`: (N, 2) array/tensor -- a genuinely 2D UMAP fit for
-    visualization, not just the first two columns of a higher-dimensional
-    embedding (UMAP's output dimensions aren't ordered by variance the way
-    PCA's are, so slicing would be a misleading substitute for an actual
-    2D fit -- see `umap_embedding.py`/`notebook_distance_measures.ipynb`'s UMAP section for this
-    choice). `labels`: (N,) integer digit labels, same order.
+    """Scatter plot of a 2D embedding (e.g., UMAP) colored by true digit labels. 
+    `embedded_2d`: 2D array/tensor of shape (n_samples, 2) representing the 2D coordinates of the embedding.
+    `labels`: 1D array/tensor of shape (n_samples,) representing the true digit labels (0-9) for each sample.
     """
     embedded_2d = embedded_2d.detach().cpu().numpy() if hasattr(embedded_2d, "detach") else np.asarray(embedded_2d)
     labels = labels.detach().cpu().numpy() if hasattr(labels, "detach") else np.asarray(labels)
@@ -296,29 +258,8 @@ def plot_umap_embedding_scatter(embedded_2d, labels, title=None, save_path=None)
 
 
 def plot_layer_decomposition_sweep(df, save_path=None):
-    """`L_head` (exact + estimated), `L_extractor`, `product`
-    (`L_extractor_estimated * L_head_exact`), and `L_full` as a function of
-    CNN width (one line each, log-y since they can span more than an order
-    of magnitude across widths), plus `looseness_ratio` vs. width in a
-    second panel with a reference line at 1.0 -- the theoretical floor the
-    submultiplicative bound (Szegedy et al. 2014) guarantees `product`
-    should never fall below, the same reference-line convention
-    `plot_epsilon_sweep`'s `selected_epsilon` line and `plot_sweep`'s `L*`
-    line use elsewhere in this project.
-
-    The second panel also plots `looseness_ratio_estimated` (using
-    `L_head_estimated` in the product instead of the exact spectral norm)
-    as a dashed line -- it is *not* guaranteed to stay above the 1.0
-    reference line the way `looseness_ratio` is, since `L_head_estimated`
-    is itself only ever a lower bound on the true `L_head` (see
-    `layer_decomposition_experiment`'s docstring), so it's shown for
-    comparison rather than as a second checkpoint.
-
-    `df`: the DataFrame `layer_decomposition.run_cnn_width_sweep` returns
-    (or anything with the same `width`/`L_head_exact`/`L_head_estimated`/
-    `L_extractor_estimated`/`L_full_estimated`/`product`/`looseness_ratio`/
-    `looseness_ratio_estimated` columns).
-    """
+    """L_head, L_extractor, product, and L_full against CNN width (left), and the resulting
+    looseness ratio against width (right)."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
     ax1.plot(df["width"], df["L_head_exact"], marker="o", color="blue", label="L_head (exact)")
@@ -349,19 +290,8 @@ def plot_layer_decomposition_sweep(df, save_path=None):
 
 
 def plot_embedding_degree_sweep(degree_results, save_path=None):
-    """For embeddings.py::elementwise_embedding at each degree in `degree_results` (as built by
-    run_experiment.py::run_embedding_degree_sweep): the selected epsilon's condition number
-    (left) and the ratio-distribution all-pairs/near-neighbor means (right), both against
-    embedding degree -- the two-panel view that makes the sweep's two headline findings directly
-    visible: condition number climbs with degree (embedding into a higher-dimensional space), while
-    both ratio summary stats shrink with degree and the near-neighbor mean stays below the
-    all-pairs mean at every degree tested (the reversal finding first established at degree=1
-    under plain Mahalanobis distance -- see README).
-
-    `degree_results`: dict keyed by degree (int), each value having `selected_epsilon`,
-    `cond_number_at_selected_epsilon`, and `ratio_summary` (with `all_pairs_mean`/
-    `near_neighbor_mean` keys) -- exactly `run_embedding_degree_sweep`'s `degree_results` return.
-    """
+    """Condition number at the selected epsilon (left), and all-pairs vs near-neighbour mean ratio
+    (right), against embedding degree."""
     degrees = sorted(degree_results.keys())
     cond_numbers = [degree_results[d]["cond_number_at_selected_epsilon"] for d in degrees]
     selected_epsilons = [degree_results[d]["selected_epsilon"] for d in degrees]
@@ -394,21 +324,7 @@ def plot_embedding_degree_sweep(degree_results, save_path=None):
 
 
 def plot_umap_mindist_sweep(sweep_rows, save_path=None):
-    """UMAP `min_dist` sweep (`notebook_distance_measures.ipynb`'s UMAP section's artifact-vs-signal
-    follow-up investigation): validation quality (`knn_label_purity`, left)
-    and the ratio-distribution near/all elevation (right), both against
-    `min_dist` -- the two-panel view that makes the sweep's headline finding
-    directly visible: near/all shrinks smoothly toward (but not fully to)
-    the raw-pixel Euclidean baseline as compression is relaxed (higher
-    `min_dist`), while embedding quality stays roughly stable -- the same
-    per-digit clustering quality can coexist with very different amounts of
-    ratio inflation, which is itself evidence the inflation is a metric
-    property, not a property of the model being measured.
-
-    `sweep_rows`: list of dicts, each with `min_dist`, `knn_label_purity`,
-    and `near_over_all` keys (matches the sweep this project's own
-    investigation script/notebook cell builds).
-    """
+    """Validation quality (left) and near/all ratio elevation (right) against UMAP's min_dist."""
     min_dists = [r["min_dist"] for r in sweep_rows]
     purities = [r["knn_label_purity"] for r in sweep_rows]
     near_over_all = [r["near_over_all"] for r in sweep_rows]
@@ -436,18 +352,7 @@ def plot_umap_mindist_sweep(sweep_rows, save_path=None):
 
 
 def plot_variance_explained_curve(curve_all_pairs, curve_near_neighbor, save_path=None):
-    """Cumulative variance-explained vs. eigenvector rank, one line per population -- the
-    Euclidean-vs-Mahalanobis near/all reversal investigation
-    (distance_measures.md's Appendix): if near-neighbor pixel differences load more
-    heavily on low-variance (rare) eigenvector directions than all-pairs differences do, the
-    near-neighbor curve should sit visibly *below* the all-pairs curve across most ranks (slower
-    to reach 100% as more eigenvectors, including low-variance ones, are needed to explain the
-    same fraction of the difference).
-
-    `curve_all_pairs`/`curve_near_neighbor`: (784,) arrays/tensors, each the population-mean
-    cumulative fraction of squared pixel-difference norm explained by the top-k eigenvectors
-    (`svd_ridge_precision`'s V, sorted by descending eigenvalue), for k=1..784.
-    """
+    """Cumulative variance explained against eigenvector rank, for all-pairs vs near-neighbour pixel differences."""
     curve_all_pairs = curve_all_pairs.detach().cpu().numpy() if hasattr(curve_all_pairs, "detach") else np.asarray(curve_all_pairs)
     curve_near_neighbor = curve_near_neighbor.detach().cpu().numpy() if hasattr(curve_near_neighbor, "detach") else np.asarray(curve_near_neighbor)
     ranks = np.arange(1, len(curve_all_pairs) + 1)
@@ -465,15 +370,7 @@ def plot_variance_explained_curve(curve_all_pairs, curve_near_neighbor, save_pat
 
 
 def plot_umap_ncomponents_sweep(sweep_rows, save_path=None):
-    """UMAP `n_components` sweep (`notebook_distance_measures.ipynb`'s UMAP section's artifact-vs-signal follow-up
-    investigation, parallel to `plot_umap_mindist_sweep`'s `min_dist` sweep): validation quality
-    (`knn_label_purity`, left) and the ratio-distribution near/all elevation (right), both against
-    `n_components` -- tests whether the near/all inflation is specific to compressing down to a
-    low-dimensional (5D) embedding, or persists at higher output dimensions too.
-
-    `sweep_rows`: list of dicts, each with `n_components`, `knn_label_purity`, and
-    `near_over_all` keys (matches the sweep this project's own notebook cell builds).
-    """
+    """Validation quality (left) and near/all ratio elevation (right) against UMAP's n_components."""
     n_components_vals = [r["n_components"] for r in sweep_rows]
     purities = [r["knn_label_purity"] for r in sweep_rows]
     near_over_all = [r["near_over_all"] for r in sweep_rows]
@@ -501,17 +398,7 @@ def plot_umap_ncomponents_sweep(sweep_rows, save_path=None):
 
 
 def plot_umap_nneighbors_sweep(sweep_rows, save_path=None):
-    """UMAP `n_neighbors` sweep (`notebook_distance_measures.ipynb`'s UMAP section's follow-up to the Nature Reviews Primer's
-    rule of thumb that reducing to more output dimensions than `n_neighbors` provides no
-    additional benefit -- relevant since the `n_components` sweep held `n_neighbors` fixed at its
-    default of 15 while going up to `n_components=100`). Same layout as
-    `plot_umap_ncomponents_sweep`/`plot_umap_mindist_sweep`: validation quality
-    (`knn_label_purity`, left) and the ratio-distribution near/all elevation (right), both against
-    `n_neighbors`, at fixed `n_components`/`min_dist`.
-
-    `sweep_rows`: list of dicts, each with `n_neighbors`, `knn_label_purity`, and `near_over_all`
-    keys.
-    """
+    """Validation quality (left) and near/all ratio elevation (right) against UMAP's n_neighbors."""
     n_neighbors_vals = [r["n_neighbors"] for r in sweep_rows]
     purities = [r["knn_label_purity"] for r in sweep_rows]
     near_over_all = [r["near_over_all"] for r in sweep_rows]
@@ -539,16 +426,8 @@ def plot_umap_nneighbors_sweep(sweep_rows, save_path=None):
 
 
 def plot_umap_seed_sweep(sweep_rows, save_path=None):
-    """UMAP random-seed sweep (`notebook_distance_measures.ipynb`'s UMAP section's stochasticity check, per the Nature
-    Reviews Primer's note that UMAP is a stochastic algorithm and results should be checked for
-    consistency across random seeds): validation quality (`knn_label_purity`, left) and the
-    ratio-distribution near/all elevation (right), both against `seed`, at the original baseline
-    `n_components=5`/default `min_dist`/`n_neighbors`. Bar charts rather than line plots -- unlike
-    `n_components`/`n_neighbors`/`min_dist`, `seed` has no natural ordering, so connecting the
-    points with a line would visually imply a trend that isn't there.
-
-    `sweep_rows`: list of dicts, each with `seed`, `knn_label_purity`, and `near_over_all` keys.
-    """
+    """Validation quality (left) and near/all ratio elevation (right) across UMAP random seeds, as
+    bar charts since seed has no natural ordering."""
     seeds = [r["seed"] for r in sweep_rows]
     purities = [r["knn_label_purity"] for r in sweep_rows]
     near_over_all = [r["near_over_all"] for r in sweep_rows]
@@ -581,15 +460,7 @@ def plot_umap_seed_sweep(sweep_rows, save_path=None):
 
 
 def plot_smoothing_gallery(samples, sigma, save_path=None):
-    """Visual sanity check for `notebook_distance_measures.ipynb`'s smoothing section's smoothing-strength sweep: original vs.
-    Gaussian-blurred (`smoothing.py::gaussian_blur_embedding`, this `sigma`) versions of a fixed
-    set of sample digits, side by side -- lets a reader eyeball directly whether a given `sigma` is
-    still visually distinguishable digit-to-digit, or has already blurred away the strokes that
-    make one digit look different from another (the risk this whole sweep exists to check).
-
-    `samples`: list of dicts, each with `digit` (int), `original` and `blurred` ((28, 28)
-    arrays/tensors, same image before/after blurring at this `sigma`).
-    """
+    """Original vs Gaussian-blurred versions of a set of sample digits, side by side, at a given sigma."""
     n = len(samples)
     fig, axes = plt.subplots(n, 2, figsize=(4, 1.8 * n), dpi=80)
     axes = np.atleast_2d(axes)
@@ -616,17 +487,7 @@ def plot_smoothing_gallery(samples, sigma, save_path=None):
 
 
 def plot_smoothing_stability_sweep(sweep_rows, max_cv=0.05, save_path=None):
-    """Epsilon-selection stability (best/minimum coefficient of variation found across the
-    standard epsilon sweep) vs. smoothing strength, for `notebook_distance_measures.ipynb`'s smoothing section's
-    `smoothed_cross_terms_embedding` sweep -- tests whether blurring before computing cross-terms
-    fixes the categorical epsilon-selection failure `local_patch_cross_terms` has on its own
-    (`distance_measures.md`'s "Epsilon selection fails categorically for this embedding" section, cv
-    0.91-1.45 against this same `max_cv` bound, at `sigma=0` here).
-
-    `sweep_rows`: list of dicts, each with `sigma` and `min_cv` keys (the smallest cv found across
-    that sigma's epsilon candidates -- matches `run_experiment.py::run_smoothing_sweep`'s per-sigma
-    `min_cv`).
-    """
+    """Best epsilon-selection coefficient of variation against Gaussian blur strength (sigma)."""
     sigmas = [r["sigma"] for r in sweep_rows]
     min_cvs = [r["min_cv"] for r in sweep_rows]
 
@@ -643,17 +504,7 @@ def plot_smoothing_stability_sweep(sweep_rows, max_cv=0.05, save_path=None):
 
 
 def plot_smoothing_ratio_sweep(sweep_rows, save_path=None):
-    """Validation quality (`knn_label_purity`, left) and the ratio-distribution near/all elevation
-    (right, Euclidean always, Mahalanobis only at sigmas where epsilon selection passed the
-    stability bound) vs. smoothing strength, for `notebook_distance_measures.ipynb`'s smoothing section's
-    `smoothed_cross_terms_embedding` sweep. Same two-panel layout as the UMAP sweeps
-    (`plot_umap_mindist_sweep` etc.) for a directly comparable read.
-
-    `sweep_rows`: list of dicts, each with `sigma`, `knn_label_purity`, `euclidean_near_over_all`,
-    and `mahalanobis_near_over_all` (the last `None` at sigmas where Mahalanobis wasn't computed --
-    skipped, not plotted as 0, so a gap in the line is visible rather than misleadingly implying a
-    measured near/all of zero).
-    """
+    """Validation quality (left) and near/all ratio elevation (right) against blur strength."""
     sigmas = [r["sigma"] for r in sweep_rows]
     purities = [r["knn_label_purity"] for r in sweep_rows]
     euclidean_near_over_all = [r["euclidean_near_over_all"] for r in sweep_rows]
@@ -688,16 +539,8 @@ def plot_smoothing_ratio_sweep(sweep_rows, save_path=None):
 
 
 def plot_truncated_mahalanobis_stability_sweep(feature_space_results, max_cv=0.05, save_path=None):
-    """Epsilon-selection-stability analogue for `notebook_truncated_mahalanobis.ipynb`: coefficient
-    of variation vs. `k` (number of retained top-variance dimensions), one line per feature space --
-    tests whether discarding low-variance directions entirely (rather than ridge-regularizing them,
-    `plot_smoothing_stability_sweep`'s subject) actually fixes the categorical epsilon-selection
-    instability `local_patch_cross_terms`/its smoothed variant showed under ridge regularization.
-
-    `feature_space_results`: dict `{name: {k: {"cv": ..., ...}}}` -- matches
-    `run_experiment.py::run_truncated_mahalanobis_sweep`'s own per-feature-space, per-k result
-    structure directly, no reshaping needed at the call site.
-    """
+    """Coefficient of variation against the number of retained top-variance dimensions (k), one line
+    per feature space."""
     fig, ax = plt.subplots(figsize=(8, 5.5))
     for name, k_results in feature_space_results.items():
         k_values = sorted(k_results.keys())
@@ -716,14 +559,8 @@ def plot_truncated_mahalanobis_stability_sweep(feature_space_results, max_cv=0.0
 
 
 def plot_truncated_mahalanobis_ratio_sweep(feature_space_results, save_path=None):
-    """Validation quality (`knn_label_purity`, left) and the ratio-distribution near/all elevation
-    (right, only plotted at `k` values where stability actually passed -- a gap in the line means
-    skipped, not a measured value of 0) vs. `k`, one line per feature space. Same two-panel layout
-    as `plot_smoothing_ratio_sweep`, for a directly comparable read.
-
-    `feature_space_results`: dict `{name: {k: {"knn_label_purity": ..., "ratio_summary": ... or
-    None, ...}}}`, matching `run_experiment.py::run_truncated_mahalanobis_sweep`'s result structure.
-    """
+    """Validation quality (left) and near/all ratio elevation (right, at stable k values only)
+    against k, one line per feature space."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     for name, k_results in feature_space_results.items():
@@ -758,15 +595,8 @@ def plot_truncated_mahalanobis_ratio_sweep(feature_space_results, save_path=None
 
 
 def plot_radius_multiplier_stability_sweep(sweep_rows, max_cv=0.05, save_path=None):
-    """Epsilon-selection stability (best/minimum coefficient of variation across the standard
-    epsilon sweep) vs. `radius_multiplier`, at the fixed, already-established best `sigma=1`, for
-    `notebook_radius_multiplier_sweep.ipynb` -- tests whether `smoothing.py`'s hardcoded
-    `radius_multiplier=3` (the kernel's `radius = round(radius_multiplier*sigma)` cutoff, never
-    itself swept before) was actually the best choice, same layout as
-    `plot_smoothing_stability_sweep`.
-
-    `sweep_rows`: list of dicts, each with `radius_multiplier` and `min_cv` keys.
-    """
+    """Best epsilon-selection coefficient of variation against the blur kernel's radius_multiplier,
+    at fixed sigma=1."""
     multipliers = [r["radius_multiplier"] for r in sweep_rows]
     min_cvs = [r["min_cv"] for r in sweep_rows]
 
@@ -783,15 +613,7 @@ def plot_radius_multiplier_stability_sweep(sweep_rows, max_cv=0.05, save_path=No
 
 
 def plot_radius_multiplier_ratio_sweep(sweep_rows, save_path=None):
-    """Validation quality (`knn_label_purity`, left) and the ratio-distribution near/all elevation
-    (right, Euclidean always, Mahalanobis only where epsilon selection passed the stability bound)
-    vs. `radius_multiplier`, at the fixed best `sigma=1`. Same two-panel layout as
-    `plot_smoothing_ratio_sweep`.
-
-    `sweep_rows`: list of dicts, each with `radius_multiplier`, `knn_label_purity`,
-    `euclidean_near_over_all`, and `mahalanobis_near_over_all` (the last `None` where Mahalanobis
-    wasn't computed -- skipped, not plotted as 0).
-    """
+    """Validation quality (left) and near/all ratio elevation (right) against radius_multiplier, at fixed sigma=1."""
     multipliers = [r["radius_multiplier"] for r in sweep_rows]
     purities = [r["knn_label_purity"] for r in sweep_rows]
     euclidean_near_over_all = [r["euclidean_near_over_all"] for r in sweep_rows]

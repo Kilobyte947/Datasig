@@ -1,39 +1,10 @@
-"""Adversarial-perturbation vs. Lipschitz-bound comparison, for the CNN.
+"""Compares achieved adversarial sensitivity against the theoretical Lipschitz bounds from
+layer_decomposition.py, for the same trained CNN checkpoint.
 
-`layer_decomposition.py` (sibling module, one level up) computes two theoretical upper bounds on
-how much a trained CNN's full 10-d logit vector can move per unit of input change:
-
-- `L_full_estimated` -- the TIGHT bound: the network's own empirical Lipschitz constant, measured
-  directly on `f = head o extractor`.
-- `product_bound` (`L_extractor_estimated * L_head_exact`) -- the LOOSE bound: the
-  submultiplicative per-layer bound (Szegedy et al. 2014), which `layer_decomposition_experiment`
-  already finds to be loose by a factor of roughly 2.4x-155x depending on estimator/width.
-
-This module asks a practical question the looseness-ratio number alone can't answer: does that
-looseness actually matter? It generates real FGSM/PGD adversarial examples against the SAME
-checkpoint and checks whether their achieved sensitivity ratio (`achieved_ratio` below) sits close
-to the tight bound, close to the loose bound, or well below both.
-
-**This module reuses `layer_decomposition.layer_decomposition_experiment` directly to get
-L_full_estimated/product_bound for whatever checkpoint it evaluates, rather than recomputing them
-independently.** Recomputing them here with different query points/estimator settings would risk
-the two numbers silently drifting out of sync with layer_decomposition.py's own results, making any
-"how close did the attack get" comparison meaningless.
-
-**IMPORTANT -- there are TWO different "L_full"-like quantities in this project.**
-`mnist_example/run_experiment.py` (one directory up) measures Lipschitz estimates on the
-scalar MARGIN function (`models.margin_fn`, `logit[y_true] - max(logit[j], j != y_true)`) -- that
-is the project's main robustness measure everywhere else. `layer_decomposition.py`, and this
-module, instead measure on the FULL logit vector (see layer_decomposition.py's own docstring for
-why: the submultiplicative bound only applies to the function `L_extractor * L_head` actually
-bounds). `achieved_ratio` below is deliberately computed on the full logit vector to match
-`L_full_estimated`'s convention -- using the margin here would compare two different functions'
-sensitivities and make ratio_to_L_full/ratio_to_product_bound meaningless.
-
-**`max_R_adv` is a LOWER BOUND on the network's true worst-case sensitivity, not an upper bound or
-exact value.** FGSM/PGD maximize cross-entropy loss (see attacks.py), not `achieved_ratio`
-directly -- a ratio-maximizing search could in principle find a larger value. Report results as
-"achieved under this attack," never as "the" worst case.
+Bounds are computed on the full logit vector, not the margin function used elsewhere in this
+project — see layer_decomposition.py. achieved_ratio is measured on the same representation so
+the comparison is valid. max_R_adv is a lower bound on the network's true worst-case sensitivity,
+not an exact value: FGSM/PGD maximise cross-entropy loss, not this ratio directly.
 """
 
 from pathlib import Path
@@ -59,12 +30,6 @@ from mnist_example.layer_decomposition import (
     full_logits_output_fn,
     fit_feature_normalizer,
     METHODS,
-    # The next two are underscore-prefixed ("module-private") in layer_decomposition.py, but
-    # imported here deliberately: compute_bounds_with_distance_fn below needs to reproduce that
-    # module's own normalize_features=True feature-standardization logic EXACTLY (see its
-    # docstring for why), and importing guarantees it can never silently drift out of sync with
-    # layer_decomposition.py's own behavior the way re-deriving the same logic independently
-    # could.
     _make_normalized_extractor_output_fn,
     _effective_head_lipschitz_exact,
 )
@@ -75,57 +40,21 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 torch.set_default_dtype(torch.float64)
 
 DEFAULT_EPSILONS = (0.05, 0.1, 0.15, 0.2, 0.25)  # Goodfellow et al. 2015's MNIST range
-
-# Matches layer_decomposition.run_cnn_width_sweep's own default widths exactly, so results from
-# the two sweeps are directly comparable width-for-width.
 DEFAULT_WIDTHS = (4, 8, 16, 32, 64)
-
-# Reuses mnist_example's own established epsilon selection (see distance_measures.md's
-# "Epsilon selection": swept {1e-6...100}, both the condition number and the subsample
-# coefficient of variation decrease monotonically across the whole sweep, and 0.01 is the
-# smallest candidate meeting both the cond<=1e4 and cv<=0.05 bounds) rather than re-running that
-# selection process from scratch here -- MNIST's pixel covariance structure doesn't depend on
-# which downstream sub-experiment is consuming it.
 MAHALANOBIS_EPSILON = 0.01
 
 
 def build_pixel_mahalanobis_distance_fn(x_flat, epsilon=MAHALANOBIS_EPSILON):
-    """Fits a ridge-regularized Mahalanobis precision matrix from raw pixel data
-    (`distance.svd_ridge_precision`) and wraps it into a `distance_fn(x, y)` closure
-    (`distance.make_mahalanobis_distance_fn`) -- the SAME construction
-    `mnist_example/run_experiment.py`'s own Euclidean-vs-Mahalanobis comparison uses, applied
-    here to raw pixel data (`embed_fn` intentionally left unset -- this project's Mahalanobis
-    metric is only ever defined over raw pixel space or an explicit embedding of it, never over
-    the CNN's internal feature/logit space, see `compute_bounds_with_distance_fn`'s docstring).
-
-    `x_flat`: (N, 784) raw pixel vectors to fit the covariance on -- pass the full training set
-    for the same "final precision matrix fit on the full 60k training set" convention
-    `mnist_example`'s own embedding-degree sweep uses, not a small dev subset (a precision
-    matrix is a property of the DATA distribution, not of any one trained model, so it only needs
-    to be fit once and can be reused across every checkpoint/width in this sub-experiment).
-    """
+    """Fits a ridge-regularised Mahalanobis distance on raw pixel data and returns it as a
+    distance_fn(x, y) callable. x_flat should be the full training set, since the precision matrix
+    is a property of the data, not of any one model."""
     precision = svd_ridge_precision(x_flat, epsilon)
     return make_mahalanobis_distance_fn(precision)
 
 
 def filter_correctly_classified(model, x, y):
-    """Restrict (x, y) to points `model` already classifies correctly.
-
-    Attacking an already-misclassified point isn't meaningful for this experiment -- the question
-    being asked ("how easily can a small input change flip a *correct* prediction, and how does
-    that compare to the Lipschitz bounds") presupposes the model got the clean point right in the
-    first place. Including misclassified points would silently mix in a different quantity ("how
-    far can an already-wrong prediction's logits move") into the same R_adv statistics, and this
-    filtering must happen before sampling/attacking, not after, so a fixed downstream sample size
-    (`n_points` in `run_epsilon_sweep`) is drawn entirely from the intended population.
-
-    `model` must accept the same input shape as `x` (flat (N, 784) -- wrap a raw SmallCNN in
-    `models.FlattenedInputWrapper` first, as every call site in this module does).
-
-    Returns (x_correct, y_correct, kept_fraction) -- kept_fraction (the clean accuracy on this
-    pool) is informational, not required by callers, but useful to sanity-check the pool wasn't
-    pathologically small after filtering.
-    """
+    """Restricts (x, y) to points model already classifies correctly. Returns (x_correct, y_correct,
+    kept_fraction)."""
     with torch.no_grad():
         preds = model(x).argmax(dim=1)
     correct = preds == y
@@ -133,33 +62,9 @@ def filter_correctly_classified(model, x, y):
 
 
 def achieved_ratio(model, x, x_adv, distance_fn=euclidean_distance_fn):
-    """R_adv = ||f(x) - f(x_adv)||_2 / distance_fn(x, x_adv), per example.
-
-    `f(x)` here is `model(x)`, the FULL (N, num_classes) logit vector (pre-softmax) -- NOT the
-    scalar margin (`models.margin_fn`) used elsewhere in this project for the main robustness
-    measure, and NOT softmax probabilities. The NUMERATOR is always this plain Euclidean
-    logit-space distance regardless of `distance_fn` -- only the INPUT-side (pixel-space)
-    denominator is pluggable, matching how the rest of this project (`estimators.py`,
-    `distance.py`) always measures Mahalanobis distance over raw pixel input, never over model
-    outputs. This must match the output representation `layer_decomposition.py`'s L_full_estimated
-    was computed on (see this module's top docstring), or the ratio_to_L_full/ratio_to_product_bound
-    comparison in `summarize_epsilon_sweep` is meaningless -- comparing a ratio computed on one
-    function against a Lipschitz bound computed on a different function is not a valid comparison,
-    even though both are scalars in a similar numeric range.
-
-    `distance_fn` defaults to plain Euclidean (`estimators.euclidean_distance_fn`) -- leaving it
-    unset leaves this function's original behavior exactly unchanged. Pass a Mahalanobis
-    `distance_fn` (see `build_pixel_mahalanobis_distance_fn`) to measure the SAME achieved
-    logit-space movement against a different notion of "how far apart are x and x_adv."
-
-    `model` must accept the same input shape as `x`/`x_adv` (flat (N, 784) --
-    FlattenedInputWrapper-wrapped, as elsewhere in this module).
-
-    Points where `x` and `x_adv` are numerically identical (e.g. epsilon=0, or an attack step that
-    made no progress) get ratio 0, not a division-by-zero NaN/inf.
-
-    Returns the (N,) tensor of per-example ratios.
-    """
+    """R_adv = ||f(x) - f(x_adv)||_2 / distance_fn(x, x_adv), per example, where f is the model's
+    full logit vector. Only the denominator is pluggable; the numerator is always Euclidean distance
+    in logit space. Returns the (N,) tensor of ratios, with 0 where x and x_adv coincide."""
     with torch.no_grad():
         f_x = model(x)
         f_adv = model(x_adv)
@@ -172,38 +77,10 @@ def achieved_ratio(model, x, x_adv, distance_fn=euclidean_distance_fn):
 def run_epsilon_sweep(model, x_pool, y_pool, epsilons=DEFAULT_EPSILONS,
                        pgd_alpha_frac=0.25, pgd_num_steps=20, pgd_num_restarts=5,
                        n_points=500, distance_fn=euclidean_distance_fn, seed=0, verbose=True):
-    """For each (epsilon, method) pair in epsilons x {"FGSM", "PGD"}, generates adversarial
-    examples for up to `n_points` correctly-classified points sampled from `x_pool`/`y_pool`, and
-    computes `achieved_ratio` and the post-attack misclassification rate for each.
-
-    `model`: FlattenedInputWrapper-wrapped trained SmallCNN (flat (N, 784) input, raw logits out)
-    -- matches `achieved_ratio`'s/`filter_correctly_classified`'s expected convention.
-
-    Filtering (Requirement 2) happens ONCE up front on the full x_pool/y_pool, before any sampling
-    or attacking -- which points are fair game to attack depends only on the model's clean
-    predictions, not on which attack is later run against them. The same n_points-point
-    correctly-classified sample is then reused across every epsilon and method, so differences
-    across rows of the resulting table reflect the attack, not which points happened to be sampled.
-
-    PGD's step size is set to `pgd_alpha_frac * epsilon` per epsilon (default epsilon/4), not one
-    fixed alpha across the whole sweep -- a step size tuned for the smallest epsilon would take
-    many more steps than necessary to usefully traverse a much larger ball at the largest epsilon.
-
-    `distance_fn` is threaded straight through to `achieved_ratio`'s denominator (default plain
-    Euclidean, unchanged behavior). The attacks themselves (`fgsm_attack`/`pgd_attack`) never
-    depend on `distance_fn` -- they only ever optimize cross-entropy loss within an L_inf
-    pixel-space ball, with no notion of Euclidean vs. Mahalanobis distance -- so calling this
-    function twice with the same `model`/`x_pool`/`y_pool`/`seed` but different `distance_fn`
-    generates BIT-IDENTICAL adversarial examples both times; only how their sensitivity is
-    MEASURED differs. This is what lets `run_bound_comparison_with_distance_fn` "repeat the exact
-    same experiment" under a different metric rather than attacking differently.
-
-    Returns a dict: {"x_eval", "y_eval" (the sampled correctly-classified points actually
-    attacked), "kept_frac" (Requirement 2's filtering diagnostic), "per_case": {(epsilon, method):
-    {"x_adv", "R_adv" (the (n_points,) achieved_ratio tensor), "pct_misclassified",
-    "is_misclassified" (the (n_points,) bool tensor `pct_misclassified` is the mean of, aligned
-    index-for-index with `x_eval`/`y_eval`/`R_adv`)}}}.
-    """
+    """Runs FGSM and PGD at each epsilon against n_points correctly-classified points, and computes
+    achieved_ratio and the post-attack misclassification rate for each. Filtering happens once, up
+    front, so the same points are attacked at every epsilon. Returns a dict with the evaluated points
+    and per-(epsilon, method) results."""
     generator = torch.Generator().manual_seed(seed)
     x_correct, y_correct, kept_frac = filter_correctly_classified(model, x_pool, y_pool)
     if verbose:
@@ -239,22 +116,9 @@ def run_epsilon_sweep(model, x_pool, y_pool, epsilons=DEFAULT_EPSILONS,
 
 
 def summarize_epsilon_sweep(sweep_results, L_full_estimated, product_bound, verbose=True):
-    """Builds the per-(epsilon, method) summary table: columns epsilon, method, mean_R_adv,
-    median_R_adv, max_R_adv, pct_misclassified, L_full_estimated, product_bound, ratio_to_L_full
-    (= max_R_adv / L_full_estimated), ratio_to_product_bound (= max_R_adv / product_bound).
-
-    `L_full_estimated`/`product_bound` are constants for the whole table (the same checkpoint's
-    bounds, from `layer_decomposition_experiment`) -- repeated on every row rather than stored
-    once elsewhere, so the table is self-contained and directly comparable row to row.
-
-    **Sanity check (Requirement 5), not just described but enforced here:** `max_R_adv` is only
-    ever a LOWER BOUND on the network's true worst-case sensitivity (see this module's top
-    docstring), so it should never exceed `L_full_estimated`, which by definition upper-bounds
-    every achieved ratio. A violation almost certainly means `L_full_estimated` itself
-    under-sampled (too few pairs/directions/query points in `layer_decomposition_experiment`) --
-    not a real bound violation -- so it's flagged with a printed warning, never a crash, so it can
-    be investigated rather than silently reported as a result.
-    """
+    """Builds the per-(epsilon, method) summary table, including each row's ratio to L_full_estimated
+    and to product_bound. Warns (without raising) if max_R_adv exceeds L_full_estimated, since that
+    bound should never be violated — a likely sign the bound itself under-sampled."""
     rows = []
     violations = []
     for (epsilon, method), case in sweep_results["per_case"].items():
@@ -279,11 +143,7 @@ def summarize_epsilon_sweep(sweep_results, L_full_estimated, product_bound, verb
 
     for epsilon, method, max_R in violations:
         print(f"WARNING: max_R_adv={max_R:.4f} > L_full_estimated={L_full_estimated:.4f} at "
-              f"epsilon={epsilon:g}, method={method!r} -- L_full is supposed to upper-bound any "
-              f"achieved ratio by definition; this almost certainly indicates L_full_estimated "
-              f"under-sampled (too few pairs/directions/query points in "
-              f"layer_decomposition_experiment), not a genuine bound violation. Inspect before "
-              f"trusting the comparison at this row.")
+              f"epsilon={epsilon:g}, method={method!r} ")
 
     if verbose:
         print(df.to_string(index=False))
@@ -291,39 +151,9 @@ def summarize_epsilon_sweep(sweep_results, L_full_estimated, product_bound, verb
 
 
 def most_and_least_sensitive_examples(model, sweep_results, distance_fn=euclidean_distance_fn):
-    """Across EVERY (epsilon, method) case in a `run_epsilon_sweep` result, finds the single
-    attacked example that achieved the LARGEST R_adv and the single one that achieved the
-    SMALLEST R_adv -- not per epsilon/method, but the overall extremes for this checkpoint, so
-    "the attack that required the biggest/smallest R_adv" has one unambiguous answer per model.
-
-    `model`: FlattenedInputWrapper-wrapped (matching `sweep_results`'s own convention) -- used
-    only to record the clean/adversarial predicted class for display; `R_adv` itself is already
-    computed and carried over from `sweep_results`, not recomputed here.
-
-    "Smallest R_adv" is still an ATTACKED point (drawn from the same correctly-classified pool
-    every other point in the sweep came from, see `filter_correctly_classified`) -- it means "of
-    the points this attack was run against, this one's logits moved the least per unit of pixel
-    change," not "an arbitrary unperturbed point."
-
-    `distance_fn` MUST be the same one `sweep_results` was itself computed under (i.e. whatever
-    was passed to `run_epsilon_sweep`) -- it's used only to recompute `pixel_distance` below for
-    display, not to re-rank examples (the ranking already lives in `sweep_results["per_case"][...
-    ]["R_adv"]`, computed under that same `distance_fn` by `run_epsilon_sweep`/`achieved_ratio`).
-    Passing a mismatched `distance_fn` would report a `pixel_distance` inconsistent with the
-    `R_adv` value it's shown alongside. Defaults to plain Euclidean, matching this module's
-    original behavior.
-
-    Returns (most_sensitive, least_sensitive), each a dict:
-        {"epsilon": float, "method": str, "index": int, "R_adv": float,
-         "x": (784,) Tensor, "x_adv": (784,) Tensor, "pixel_distance": float,
-         "y_true": int, "pred_clean": int, "pred_adv": int}
-
-    `pixel_distance` is `distance_fn(x, x_adv)` -- the raw, INITIAL distance between the two
-    images, in the original 784-d pixel space, before either goes through the extractor. This is
-    exactly `R_adv`'s denominator (`achieved_ratio`'s own `distance_fn(x, x_adv)`), so
-    `R_adv == (logit-space distance) / pixel_distance` holds for this example -- see
-    `head_layer_bound_check`'s `actual_logit_distance`, which is that same numerator.
-    """
+    """Finds the single example with the largest and smallest R_adv across every (epsilon, method)
+    case. Returns (most_sensitive, least_sensitive) dicts with the input/adversarial pair, predictions,
+    and pixel distance."""
     x_eval, y_eval = sweep_results["x_eval"], sweep_results["y_eval"]
 
     best = None   # (R_adv, epsilon, method, idx)
@@ -356,27 +186,9 @@ def most_and_least_sensitive_examples(model, sweep_results, distance_fn=euclidea
 
 def find_examples_by_criteria(model, sweep_results, epsilon, method, R_adv_max=None,
                                misclassified_only=None, distance_fn=euclidean_distance_fn):
-    """Finds every example in ONE (epsilon, method) case of a `run_epsilon_sweep` result matching
-    simple threshold/outcome criteria -- e.g. "R_adv < 10 but still misclassified," the cheap
-    flips a small sensitivity ratio was nonetheless enough to cause. Generalizes
-    `most_and_least_sensitive_examples`'s per-example dict-packaging (one `model(x)`/`model(x_adv)`
-    call per match) to an arbitrary filter instead of a fixed argmax/argmin pair, and additionally
-    carries the FULL logit vector (not just argmax) on each side, for direct inspection of how
-    close/far the flip was.
-
-    `R_adv_max`: keep only examples with `R_adv < R_adv_max` (None = no threshold).
-    `misclassified_only`: True keeps only misclassified examples, False keeps only still-correct
-    ones, None applies no filter on outcome.
-    `distance_fn` MUST match what `sweep_results` was computed under (see
-    `most_and_least_sensitive_examples`'s docstring for why) -- defaults to plain Euclidean.
-
-    Returns a list of dicts (possibly empty), each:
-        {"epsilon", "method", "index", "R_adv", "x", "x_adv", "pixel_distance", "y_true",
-         "pred_clean", "pred_adv", "logits_clean", "logits_adv"}
-    -- same core keys as `most_and_least_sensitive_examples`'s output, plus `logits_clean`/
-    `logits_adv` ((num_classes,) tensors, the model's full pre-softmax output on the clean/
-    adversarial image respectively; `pred_clean`/`pred_adv` are each logits' argmax).
-    """
+    """Finds every example in one (epsilon, method) case matching given thresholds: R_adv_max and/or
+    misclassified_only. Returns a list of example dicts, each including the full clean and adversarial
+    logit vectors."""
     case = sweep_results["per_case"][(epsilon, method)]
     x_eval, y_eval = sweep_results["x_eval"], sweep_results["y_eval"]
     R_adv, is_misclassified, x_adv_all = case["R_adv"], case["is_misclassified"], case["x_adv"]
@@ -404,38 +216,9 @@ def find_examples_by_criteria(model, sweep_results, epsilon, method, R_adv_max=N
 
 
 def head_layer_bound_check(model, example):
-    """For one attacked example (an entry from `most_and_least_sensitive_examples`), computes the
-    Euclidean distance between the extracted features -- `model.extractor`'s output, right BEFORE
-    the final linear head -- for the clean vs. adversarial input, and compares it against the
-    head layer's own exact Lipschitz bound: for a linear map `head(a) = W@a + b`,
-    `||head(a) - head(b)||_2 <= L_head_exact * ||a - b||_2` (`L_head_exact` = the spectral norm of
-    `W`, `estimators.linear_layer_lipschitz`), with equality attainable along `W`'s top
-    right-singular direction -- see `layer_decomposition.py`'s docstring for the same identity.
-
-    `model`: the raw, trained `SmallCNN` (`.extractor`/`.head` directly accessible -- NOT
-    FlattenedInputWrapper-wrapped). Uses the RAW (unnormalized) extractor features and the raw
-    head weights throughout -- not the standardized features `layer_decomposition_experiment`'s
-    `normalize_features=True` path uses internally for estimation purposes -- since
-    `model.head(model.extractor(x)) == model(x)` exactly only for the raw, unstandardized
-    composition (see `layer_decomposition.py`'s `_make_normalized_head_output_fn` docstring); this
-    function checks the bound for the network's ACTUAL forward computation, not an internal
-    estimation convenience.
-    `example`: one of `most_and_least_sensitive_examples`'s returned dicts (needs flat `(784,)`
-    `x`/`x_adv` pixel tensors).
-
-    Returns:
-        {"feature_distance": ||extractor(x) - extractor(x_adv)||_2,
-         "L_head_exact": the head's exact spectral-norm Lipschitz constant (raw weights),
-         "head_bound": L_head_exact * feature_distance -- the bound's prediction for how far the
-             logits can move given this much feature-space movement,
-         "actual_logit_distance": ||head(extractor(x)) - head(extractor(x_adv))||_2, the network's
-             REAL logit-space distance for this pair (equals ||f(x)-f(x_adv)||_2,
-             achieved_ratio's numerator for this example, since f = head o extractor exactly),
-         "head_bound_tightness": actual_logit_distance / head_bound -- always <= 1 (up to floating
-             point) for a linear layer, by Cauchy-Schwarz; how close to 1 shows whether this
-             specific pair of features happened to differ mostly along the head's most-sensitive
-             (top-singular-value) direction, or a much less sensitive one.}
-    """
+    """Checks the head layer's exact Lipschitz bound against its actual behaviour for one attacked
+    example: feature-space distance, the bound it implies for logit movement, and the network's real
+    logit-space distance. Returns a dict including head_bound_tightness, the ratio of actual to bound."""
     with torch.no_grad():
         x_image = example["x"].reshape(1, 1, 28, 28)
         x_adv_image = example["x_adv"].reshape(1, 1, 28, 28)
@@ -461,29 +244,11 @@ def head_layer_bound_check(model, example):
 
 # ---------------------------------------------------------------------------
 # Per-run measurement helpers for the multi-seed confirmation sweep (seed_sweep.py).
-#
-# The single-seed width sweep (run_cnn_adversarial_width_sweep) found width=64 achieving a higher
-# L_full_estimated than width=32 while width=32 shows a HIGHER misclassification_rate at matched
-# epsilon -- an apparent inversion. These four functions capture the diagnostics needed to tell
-# which of three candidate mechanisms explains it (logit scale, margin-functional Lipschitz
-# constant, or attack-direction alignment), independent of whether the inversion itself survives
-# reseeding (seed_sweep.py checks that separately). Each is standalone and does not alter any
-# existing call path in this module.
 # ---------------------------------------------------------------------------
 
 def adversarial_accuracy(model, x, x_adv, y):
-    """Clean/adversarial accuracy and flip-rate diagnostics for one attacked batch.
-
-    `x`/`y` are assumed already restricted to the correctly-classified pool (see
-    `filter_correctly_classified` -- every other function in this module makes the same
-    assumption about its evaluation points), so `clean_acc` is 1.0 by construction here; the
-    informative quantity is `adv_acc`/`misclassification_rate`, the post-attack flip rate.
-
-    `model`: FlattenedInputWrapper-wrapped (flat (N, 784) input), matching this module's
-    convention throughout. `x`/`x_adv`: flat (N, 784). `y`: (N,) true labels.
-
-    Returns {"clean_acc", "adv_acc", "misclassification_rate", "n_flipped", "n_evaluated"}.
-    """
+    """Clean and adversarial accuracy for one attacked batch, assumed already restricted to correctly-
+    classified points. Returns clean_acc, adv_acc, misclassification_rate, and flip counts."""
     with torch.no_grad():
         pred_clean = model(x).argmax(dim=1)
         pred_adv = model(x_adv).argmax(dim=1)
@@ -499,22 +264,8 @@ def adversarial_accuracy(model, x, x_adv, y):
 
 
 def clean_logit_stats(model, x):
-    """Distribution of the CLEAN model's logit-vector norm and top-2 margin over `x` -- the
-    "logit scale" mechanism candidate: a network whose clean logits are simply larger in
-    magnitude, or more confidently separated between its top two classes, could show a
-    smaller/larger flip rate at fixed attack epsilon independent of its Lipschitz constant.
-
-    `model`: FlattenedInputWrapper-wrapped. `x`: flat (N, 784) pixel input -- no `y` needed, this
-    is purely a property of the clean model's own output distribution, not of correctness.
-
-    `top2_margin` here is the gap between the two LARGEST logits (top-1 minus runner-up, by logit
-    value) -- NOT `models.margin_fn`'s true-class-vs-runner-up margin, since no label is
-    used/relevant here (on a correctly-classified pool the two coincide, but this function itself
-    never assumes that).
-
-    Returns {"mean_logit_norm", "std_logit_norm", "mean_top2_margin", "std_top2_margin",
-    "p5_top2_margin", "p10_top2_margin"} (the last two: 5th/10th percentiles of top2_margin).
-    """
+    """Distribution of the clean model's logit norm and top-2 margin over x. 
+    Returns mean/std of both, plus the 5th and 10th percentiles of the margin."""
     with torch.no_grad():
         logits = model(x)
     logit_norm = logits.norm(p=2, dim=-1)
@@ -532,28 +283,9 @@ def clean_logit_stats(model, x):
 
 def margin_lipschitz_estimate(model, x, y, estimator="pairwise", distance_fn=euclidean_distance_fn,
                                max_pairs=None, radius=1.0, n_directions=40, seed=0):
-    """Empirical Lipschitz constant of the SCALAR margin functional (`models.margin_fn`,
-    `logit[y_true] - max(logit[j], j != y_true)`) -- this project's main robustness measure
-    everywhere OUTSIDE `layer_decomposition.py`/this module's own bound machinery (see this
-    module's top docstring for the two-different-"L_full" caveat). Reuses `estimators.py`'s
-    existing three sub-methods rather than reimplementing margin estimation here.
-
-    `estimator`: one of `layer_decomposition.METHODS` (`"pairwise"`, `"grid"`, `"gradient"`) --
-    dispatched exactly as `layer_decomposition_experiment` dispatches for `L_head_estimated`/
-    `L_extractor_estimated` (`"grid"`/`"gradient"` return a per-point array; the scalar estimate
-    returned here is that array's max, matching `layer_decomposition_experiment`'s own
-    convention).
-
-    `model`: FlattenedInputWrapper-wrapped -- `margin_fn` calls `model(x)` directly on flat
-    (N, 784) input, matching every other call site of `margin_fn` in this project.
-
-    **Must be reported under its own name (`L_margin_estimated`) wherever used alongside
-    `L_full_estimated` in downstream tables/plots -- the two measure Lipschitz constants of
-    DIFFERENT functions (scalar margin vs. full logit vector) and must never be merged into one
-    "Lipschitz" column.**
-
-    Returns a single float.
-    """
+    """Empirical Lipschitz constant of the scalar margin function, via one of the three estimators in
+    estimators.py ("pairwise", "grid", "gradient"). This is a different function from the full-logit
+    bounds used elsewhere in this module — report it separately, never merged with L_full_estimated."""
     if estimator not in METHODS:
         raise ValueError(f"unknown estimator {estimator!r}, expected one of {METHODS}")
     if estimator == "pairwise":
@@ -569,30 +301,9 @@ def margin_lipschitz_estimate(model, x, y, estimator="pairwise", distance_fn=euc
 
 
 def flip_direction_alignment(model, x, x_adv, y):
-    """For each attacked point, how well does the FULL logit-vector movement `dz = f(x_adv)-f(x)`
-    align with the direction that would flip the label toward the clean runner-up class -- the
-    "direction alignment" mechanism candidate: even at a fixed logit-movement magnitude, an
-    attack that happens to move mostly along `e_k - e_y` (k = the clean runner-up) is far more
-    effective at actually flipping the prediction than one that moves an equal amount in some
-    other direction.
-
-    `k` (the runner-up class) is defined exactly as `models.margin_fn` defines it: the class with
-    the second-highest logit at the CLEAN input `x` (`argmax_{j != y} logits(x)[j]`) -- the same
-    runner-up `margin_fn`'s Lipschitz constant governs.
-
-    `cos(dz, e_k - e_y) = (dz_k - dz_y) / (||dz||_2 * ||e_k - e_y||_2)`, sign chosen (via this
-    formula directly, no separate sign flip needed) so that POSITIVE means the movement pushes
-    logit_k up relative to logit_y -- i.e. aligned with flipping the prediction from y to k -- and
-    NEGATIVE means it pushes the other way. Points where `dz` is (numerically) exactly zero get
-    cosine 0, not a division-by-zero NaN.
-
-    `model`: FlattenedInputWrapper-wrapped. `x`/`x_adv`: flat (N, 784). `y`: (N,) true labels
-    (used only to identify the runner-up at the clean input, not to check correctness -- callers
-    are expected to pass already correctly-classified points, matching this module's convention,
-    but this function itself doesn't enforce it).
-
-    Returns {"mean_cosine_alignment", "std_cosine_alignment"}.
-    """
+    """For each attacked point, how well the logit movement aligns with the direction that would flip
+    the prediction toward the clean runner-up class. Positive means aligned with flipping; points with
+    zero movement get cosine 0. Returns mean and std of the cosine alignment."""
     with torch.no_grad():
         logits_clean = model(x)
         logits_adv = model(x_adv)
@@ -618,27 +329,9 @@ def run_bound_comparison(model, x_query, y_query, x_pool, y_pool, x_train_for_no
                           epsilons=DEFAULT_EPSILONS, bound_method="pairwise",
                           pgd_alpha_frac=0.25, pgd_num_steps=20, pgd_num_restarts=5,
                           n_points=500, normalize_features=True, seed=0, verbose=True):
-    """Full single-checkpoint pipeline: computes L_full_estimated/product_bound for `model` via
-    `layer_decomposition.layer_decomposition_experiment` (reused, not recomputed independently --
-    see this module's top docstring), then runs the FGSM/PGD epsilon sweep against the SAME
-    checkpoint and compares achieved sensitivity to those two bounds.
-
-    `model`: a trained, raw `SmallCNN` (`.extractor`/`.head` directly accessible, NOT
-    FlattenedInputWrapper-wrapped) -- wrapped internally here, matching
-    `layer_decomposition_experiment`'s own convention, since both the bound computation and the
-    attacks need the flat-input wrapped version.
-
-    `x_query`/`y_query`: held-out points for the Lipschitz bound estimate (passed straight through
-    to `layer_decomposition_experiment`). `x_pool`/`y_pool`: a separate, larger pool the attack's
-    evaluation points are sampled from (after correctness-filtering) -- kept disjoint from
-    x_query/y_query so the bound estimate and the attack results are independent measurements of
-    the same model, not double use of the same points. `x_train_for_norm`: passed straight through
-    to `layer_decomposition_experiment` (feature-standardizer fitting).
-
-    Returns (summary_df, sweep_results): `summary_df` is `summarize_epsilon_sweep`'s
-    per-(epsilon, method) table; `sweep_results` is `run_epsilon_sweep`'s raw per-point data (for
-    plotting distributions, see plots.py).
-    """
+    """Computes L_full_estimated and product_bound for model via layer_decomposition_experiment, then
+    runs the FGSM/PGD epsilon sweep against the same checkpoint and compares achieved sensitivity to
+    both bounds. Returns (summary_df, sweep_results)."""
     bound_result = layer_decomposition_experiment(
         model, x_query, y_query, x_train_for_norm=x_train_for_norm,
         method=bound_method, normalize_features=normalize_features, seed=seed, verbose=verbose)
@@ -657,42 +350,11 @@ def run_bound_comparison(model, x_query, y_query, x_pool, y_pool, x_train_for_no
 
 def compute_bounds_with_distance_fn(model, x_query, y_query, distance_fn, x_train_for_norm,
                                      max_pairs=None, seed=0, verbose=True):
-    """Generalizes `layer_decomposition_experiment`'s `method="pairwise"` computation of
-    `L_head_exact`/`L_extractor_estimated`/`L_full_estimated`/`product`/`looseness_ratio` to an
-    ARBITRARY pixel-space `distance_fn` -- needed because `layer_decomposition_experiment` itself
-    hardcodes Euclidean distance internally (it has no `distance_fn` parameter), and modifying
-    that function is out of scope for this sub-experiment (see this module's top docstring: only
-    import/reuse layer_decomposition.py's pieces, never edit it).
-
-    **Key insight this function relies on: `L_head_exact` does NOT depend on `distance_fn` at
-    all.** The head layer maps EXTRACTED FEATURES (always compared via plain Euclidean distance
-    throughout this project -- there is no Mahalanobis metric defined over the 1568-d feature
-    space anywhere in `mnist_example`) to LOGITS (also always Euclidean). `distance_fn` only
-    ever changes how the ORIGINAL PIXEL input is compared, which affects `L_extractor_estimated`
-    (features / pixel-distance) and therefore `L_full_estimated`/`product`, but never touches the
-    feature-to-logit map itself. This is also why `head_layer_bound_check` needs no Mahalanobis
-    variant -- it already only ever operates in feature/logit space, independent of whatever
-    `distance_fn` measured the pixel-space side.
-
-    Reuses `layer_decomposition.py`'s own `extractor_output_fn`/`full_logits_output_fn` and
-    feature-standardization helpers (`fit_feature_normalizer`,
-    `_make_normalized_extractor_output_fn`, `_effective_head_lipschitz_exact` -- imported despite
-    the leading underscore, deliberately, to guarantee this reduces to EXACTLY
-    `layer_decomposition_experiment(method="pairwise", normalize_features=True)`'s own numbers
-    when `distance_fn=euclidean_distance_fn` is passed, rather than risking silent drift from
-    re-deriving the same standardization logic independently -- checked directly in
-    `tests/test_adversarial_run_experiment.py`), plus `estimators.pairwise_lipschitz`
-    (which already accepts a `distance_fn` argument).
-
-    `model`: a trained, raw `SmallCNN`. `x_train_for_norm`: training-set sample to fit the feature
-    standardizer on -- see `layer_decomposition_experiment`'s own docstring for why this must be
-    separate from `x_query`.
-
-    Returns {"L_head_exact", "L_extractor_estimated", "L_full_estimated", "product",
-    "looseness_ratio"} -- the same keys `layer_decomposition_experiment`'s result dict uses for
-    these quantities, so downstream code (`run_bound_comparison_with_distance_fn`) reads this the
-    same way `run_bound_comparison` reads `layer_decomposition_experiment`'s result.
-    """
+    """Recomputes L_head_exact, L_extractor_estimated, L_full_estimated and product_bound under an
+    arbitrary pixel-space distance_fn — needed since layer_decomposition_experiment hardcodes
+    Euclidean. L_head_exact is unaffected by distance_fn, since it operates in feature/logit space,
+    not pixel space. Matches layer_decomposition_experiment's own numbers exactly when
+    distance_fn=euclidean_distance_fn. Returns the same keys as layer_decomposition_experiment."""
     wrapped_model = FlattenedInputWrapper(model)
     mean, std = fit_feature_normalizer(model, x_train_for_norm)
     extractor_fn = _make_normalized_extractor_output_fn(mean, std)
@@ -731,20 +393,9 @@ def run_bound_comparison_with_distance_fn(model, x_query, y_query, x_pool, y_poo
                                            distance_fn, epsilons=DEFAULT_EPSILONS,
                                            pgd_alpha_frac=0.25, pgd_num_steps=20, pgd_num_restarts=5,
                                            n_points=500, max_pairs=None, seed=0, verbose=True):
-    """Pluggable-`distance_fn` analogue of `run_bound_comparison` -- computes
-    `L_full_estimated`/`product_bound` via `compute_bounds_with_distance_fn` (since
-    `layer_decomposition_experiment` itself can't be handed a non-Euclidean `distance_fn`), then
-    runs the FGSM/PGD epsilon sweep with `R_adv` measured under the SAME `distance_fn`
-    (`achieved_ratio`'s denominator, via `run_epsilon_sweep`'s own `distance_fn` argument).
-
-    Calling this with `model`/`x_pool`/`y_pool`/`seed` identical to a prior `run_bound_comparison`
-    call generates BIT-IDENTICAL adversarial examples (see `run_epsilon_sweep`'s docstring) --
-    only how those examples' sensitivity is MEASURED differs. This is the precise sense in which
-    this function "repeats the exact same experiment" under a different distance metric, rather
-    than running a differently-attacked, less comparable variant.
-
-    Returns (summary_df, sweep_results), same shape as `run_bound_comparison`'s.
-    """
+    """Pluggable-distance_fn version of run_bound_comparison. Produces the same adversarial examples
+    as run_bound_comparison for the same model/seed — only how sensitivity is measured differs.
+    Returns (summary_df, sweep_results)."""
     bound_result = compute_bounds_with_distance_fn(
         model, x_query, y_query, distance_fn, x_train_for_norm,
         max_pairs=max_pairs, seed=seed, verbose=verbose)
@@ -768,51 +419,9 @@ def run_cnn_adversarial_width_sweep(widths=DEFAULT_WIDTHS, epochs=6, train_subse
                                      pgd_alpha_frac=0.25, pgd_num_steps=20, pgd_num_restarts=5,
                                      normalize_features=True, seed=0, verbose=True,
                                      save_path=RESULTS_DIR / "adversarial_width_sweep.csv"):
-    """Repeats `run_bound_comparison` across the same CNN widths as
-    `layer_decomposition.run_cnn_width_sweep` (`DEFAULT_WIDTHS` matches its default exactly), to
-    see whether the gap between achieved adversarial sensitivity and the theoretical bounds
-    narrows or widens with model capacity -- the practical-consequences extension of that sweep's
-    looseness-vs-width finding.
-
-    No checkpoints from `layer_decomposition.run_cnn_width_sweep` are saved to disk (it only
-    persists its results CSV, not the trained models) -- this trains a FRESH `SmallCNN` at each
-    width instead, using the identical training configuration (`conv_channels=(width, 2*width)`,
-    same `epochs`/`train_subset_size`/`seed` defaults) so results are still comparable width-for-
-    width, just not from literally the same weights.
-
-    The same held-out query points (for the Lipschitz bound), training-sample points (for feature
-    normalization), and attack pool are reused across every width (fixed by `seed`) -- exactly
-    `layer_decomposition.run_cnn_width_sweep`'s own reasoning for doing this -- so differences
-    between rows reflect the model, not which points happened to be sampled this time. The attack
-    pool is drawn from the test points NOT used as Lipschitz-bound query points, so the two
-    measurements stay independent (see `run_bound_comparison`'s docstring).
-
-    Saves one per-(epsilon, method) summary CSV per width (`adversarial_epsilon_sweep_width{w}.csv`)
-    plus a single combined CSV (`save_path`) with one row per width. The combined CSV extends
-    `layer_decomposition.run_cnn_width_sweep`'s own column convention (`width`, `train_acc`,
-    `test_acc`, ...) by APPENDING new columns rather than introducing a parallel format:
-    `L_full_estimated`, `product_bound` (shared across methods for that width), and, for each of
-    FGSM/PGD, `max_R_adv_{method}`/`ratio_to_L_full_{method}`/`ratio_to_product_bound_{method}`
-    evaluated at the LARGEST swept epsilon (the strongest, most informative attack condition for
-    the width-vs-bound-closeness comparison -- see `plots.py::plot_bound_closeness_vs_width`).
-
-    Also records, per width, the single attacked example achieving the LARGEST and the SMALLEST
-    R_adv across every (epsilon, method) case (`most_and_least_sensitive_examples`), each then
-    extended in place with `head_layer_bound_check`'s feature-space-distance-vs-head-Lipschitz-
-    bound comparison for that specific example -- both computed here, while that width's trained
-    model is still in scope, rather than reconstructed later from `per_width_sweep_results` alone
-    (which carries the raw (x, x_adv) tensors but not predictions or the trained model itself,
-    since it isn't retained after this function returns).
-
-    Returns (combined_df, per_width_summary_dfs, per_width_extremes): combined_df is the
-    one-row-per-width DataFrame described above; per_width_summary_dfs is a dict
-    {width: summary_df} with the full per-(epsilon, method) table for each width (same as
-    `run_bound_comparison`'s summary_df); per_width_extremes is a dict
-    {width: (most_sensitive, least_sensitive)}, each element `most_and_least_sensitive_examples`'s
-    return value for that width's checkpoint, with `head_layer_bound_check`'s keys
-    (`feature_distance`, `L_head_exact`, `head_bound`, `actual_logit_distance`,
-    `head_bound_tightness`) merged in.
-    """
+    """Repeats run_bound_comparison across CNN widths, to see whether the gap between achieved
+    adversarial sensitivity and the theoretical bounds narrows or widens with model capacity. Trains
+    a fresh SmallCNN per width. Returns (combined_df, per_width_summary_dfs, per_width_extremes)."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
     dev = get_dev_subset(train, n=train_subset_size, seed=seed)
@@ -892,26 +501,9 @@ def run_cnn_adversarial_width_sweep_with_distance_fn(
         epsilons=DEFAULT_EPSILONS, pgd_alpha_frac=0.25, pgd_num_steps=20, pgd_num_restarts=5,
         max_pairs=None, seed=0, verbose=True,
         save_path=RESULTS_DIR / "adversarial_width_sweep_distance_fn.csv"):
-    """Pluggable-`distance_fn` analogue of `run_cnn_adversarial_width_sweep` -- same widths,
-    training configuration, and query/pool-point construction, but the bounds and R_adv are
-    computed via `run_bound_comparison_with_distance_fn` under an arbitrary pixel-space
-    `distance_fn` (e.g. `build_pixel_mahalanobis_distance_fn`'s output) instead of hardcoded
-    Euclidean.
-
-    Retrains a FRESH `SmallCNN` at each width rather than reusing `run_cnn_adversarial_width_
-    sweep`'s in-memory models (which aren't retained after that function returns) -- but since
-    `torch.manual_seed(seed)` is called immediately before each `SmallCNN(...)` construction and
-    every other source of randomness (data loader shuffling, dev-subset sampling) is also seeded
-    identically, training is fully deterministic given the same `seed`/`train_subset_size`/
-    `epochs`, so this reproduces BIT-IDENTICAL checkpoints to `run_cnn_adversarial_width_sweep`'s
-    own per-width models (checked directly in `tests/test_adversarial_run_experiment.py`).
-    The two width sweeps are therefore comparing the SAME trained models under two different
-    distance metrics, not independently-trained ones that might differ by chance.
-
-    Returns (combined_df, per_width_summary_dfs, per_width_extremes) -- identical shape to
-    `run_cnn_adversarial_width_sweep`'s return value, so both can be handed to the same plotting
-    functions (`plots.py`).
-    """
+    """Pluggable-distance_fn version of run_cnn_adversarial_width_sweep. Reproduces bit-identical
+    checkpoints to that function for the same seed, so both sweeps compare the same trained models
+    under different distance metrics. Returns the same shape as run_cnn_adversarial_width_sweep."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
     dev = get_dev_subset(train, n=train_subset_size, seed=seed)
@@ -985,19 +577,9 @@ def run_cnn_adversarial_width_sweep_with_distance_fn(
 
 
 def main(seed=0, verbose=True):
-    """Single-checkpoint baseline run: the project's default `SmallCNN` (`conv_channels=(16,32)`,
-    matching every other CNN trained elsewhere in this project), trained on full MNIST, then the
-    full epsilon sweep and bound comparison against it. Mirrors
-    `layer_decomposition.py`'s notebook default -- NOT the width sweep
-    (`run_cnn_adversarial_width_sweep`), which is opt-in and called directly, matching this
-    project's convention that markedly-slower sweep functions aren't wired into `main()`.
-
-    At `seed=0` (the default), loads the same shared checkpoint every other single-run driver in
-    this project uses (`models.train_or_load_small_cnn`) rather than training an independent copy
-    -- so this baseline is directly comparable, weight-for-weight, to `run_experiment.py`'s own
-    `SmallCNN` run and (eventually) `signature_distance`'s. A non-zero `seed` trains fresh instead,
-    since the shared checkpoint is only defined for the canonical `seed=0` recipe.
-    """
+    """Baseline run: trains the project's default SmallCNN on full MNIST, then runs the full epsilon
+    sweep and bound comparison. At seed=0, reuses the shared checkpoint used elsewhere in this
+    project. Returns (summary_df, sweep_results)."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
 
@@ -1035,18 +617,8 @@ def main(seed=0, verbose=True):
 
 
 def main_with_distance_fn(distance_fn, seed=0, verbose=True):
-    """Pluggable-`distance_fn` analogue of `main()` -- trains the SAME baseline `SmallCNN`
-    configuration (`conv_channels=(16, 32)`, full MNIST, `epochs=8`), then runs the full epsilon
-    sweep and bound comparison against it via `run_bound_comparison_with_distance_fn` instead of
-    hardcoded Euclidean.
-
-    Training is deterministic given the same `seed` (see
-    `run_cnn_adversarial_width_sweep_with_distance_fn`'s docstring for the same argument applied
-    to the width sweep), so calling this with `seed=0` reproduces a BIT-IDENTICAL checkpoint to
-    `main()`'s own model -- the two baseline runs are directly comparing the SAME trained network
-    under two different distance metrics. At `seed=0`, that identical checkpoint is now the shared
-    one (`models.train_or_load_small_cnn`), same as `main()`.
-    """
+    """Pluggable-distance_fn version of main, using the same SmallCNN configuration and seed
+    convention. Returns (summary_df, sweep_results)."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
 

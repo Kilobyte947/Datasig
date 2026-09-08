@@ -1,35 +1,12 @@
-"""Stage 8 sweep: Method B hyperparameter optimisation (geometry,
-points/line, truncation depth, interpolation) - Stage A cheap screen (no
-model training, per-line same/different-digit AUC) and Stage B full
-validation (per-path adversarial/control evaluation on finalists).
-
-Reuses existing signature/distance/adversarial infrastructure:
-`make_reference_lines`/`line_stream` (streams.py), `signature_of_stream`
-(signatures.py), `choose_rescale_factor`/`rescale_signature`/
-`per_line_distances`/`auc_for_distance` (distances.py), and
-`train_or_load_small_cnn`/`train_or_load_strong_cnn` (models.py) /
-`fgsm_attack`/`margin`/`random_noise_perturbation` (attacks.py). This module
-adds new stream-construction variants (a cubic-spline refinement on top of
-the existing linear stream) and new sweep/scoring orchestration.
-`per_line_aucs` below and `distances.run_per_line_auc_diagnostic` both need the same
-same/different-digit AUC computation (one hardcoded to the default
-geometry, one generalized over the sweep grid) - factored into
-`distances.auc_for_distance`, a small shared addition, rather than each
-keeping its own copy.
-
-Key efficiency fact this sweep relies on, verified directly rather than
-assumed: a depth-D truncated signature's first `1+2+...+2**d` coefficients
-(d <= D) are bit-identical to the depth-d signature computed directly -
-truncating a tensor-algebra signature to a lower level never changes the
-lower-level terms. So each (geometry, points, interpolation) stream only
-needs the expensive signature step run ONCE, at the maximum depth swept;
-all lower depths are prefix-sliced from that one result, not recomputed.
+"""Method B hyperparameter optimisation (geometry, points per line, truncation
+depth, interpolation). 
+- Stage A is a cheap screen (no model training, per-line same/different-digit AUC); 
+- Stage B is full validation (per-path adversarial/control evaluation on finalists).
 """
 
 import numpy as np
 import torch
 from scipy.interpolate import CubicSpline
-
 from signature_distance.attacks import fgsm_attack, random_noise_perturbation
 from signature_distance.data_pool import load_eval_pool
 from signature_distance.distances import (
@@ -48,27 +25,19 @@ torch.set_default_dtype(torch.float64)
 
 WIDTH = 2
 
-
 def _level_sizes(depth: int) -> list:
+    """Number of coefficients at each signature level 0..depth."""
     return [WIDTH ** n for n in range(depth + 1)]
 
-
 def signature_dim(depth: int) -> int:
+    """Total signature dimension at a given depth."""
     return sum(_level_sizes(depth))
 
 
 def cubic_spline_refine(stream_one_line: torch.Tensor, upsample_factor: int = 8) -> torch.Tensor:
-    """Given one line's linear stream (N, K, 2) [t, value] (from the
-    existing, unmodified `line_stream`), fit a natural cubic spline through
-    each image's K points and resample at `upsample_factor * K` points.
-    `signature_of_stream` (unmodified) still only ever computes a
-    piecewise-LINEAR path signature - feeding it this finely-resampled,
-    smooth curve is a standard way to approximate the signature of a
-    genuinely curved (cubic-spline) path, since the piecewise-linear
-    signature of a sufficiently fine discretization converges to the true
-    curve's signature. Does not change signature dimension (that depends
-    only on width/depth, not point count).
-    """
+    """Fits a natural cubic spline through each image's line and resamples at a finer resolution,
+    approximating the signature of a curved rather than piecewise-linear path. Does not change 
+    signature dimension."""
     n, k, _ = stream_one_line.shape
     t = stream_one_line[:, :, 0].numpy()
     v = stream_one_line[:, :, 1].numpy()
@@ -87,10 +56,8 @@ def cubic_spline_refine(stream_one_line: torch.Tensor, upsample_factor: int = 8)
 def build_stream(images: torch.Tensor, angles_deg: tuple, counts: tuple,
                   points_per_line: int, interpolation: str,
                   cubic_upsample: int = 8) -> torch.Tensor:
-    """(N, num_lines, K', 2) stream for one Stage-A config - reuses
-    make_reference_lines/line_stream unmodified for the base (linear)
-    construction; cubic_spline_refine (new, above) on top for the "cubic"
-    variant."""
+    """Builds the (N, num_lines, K, 2) stream for one Stage A configuration, with either linear or
+    cubic-spline interpolation."""
     lines = make_reference_lines(angles_deg=angles_deg, counts=counts, points_per_line=points_per_line)
     stream = line_stream(images, lines)  # (N, num_lines, points_per_line, 2)
     if interpolation == "linear":
@@ -104,10 +71,7 @@ def build_stream(images: torch.Tensor, angles_deg: tuple, counts: tuple,
 
 
 def per_line_aucs(sig: torch.Tensor, labels: torch.Tensor) -> list:
-    """Same/different-digit AUC per line - uses the same shared
-    `distances.auc_for_distance` helper `distances.run_per_line_auc_diagnostic`
-    does (that function is hardcoded to the default geometry/depth=4; this
-    version works for any geometry/depth, hence the separate call site)."""
+    """Same/different-digit AUC for each line in a batch of per-line signatures."""
     n = sig.shape[0]
     iu, ju = torch.triu_indices(n, n, offset=1)
     same = (labels[iu] == labels[ju]).numpy().astype(int)
@@ -121,12 +85,8 @@ def per_line_aucs(sig: torch.Tensor, labels: torch.Tensor) -> list:
 def evaluate_config(images: torch.Tensor, labels: torch.Tensor, angles_deg: tuple, counts: tuple,
                      points_per_line: int, depths: tuple, interpolation: str,
                      max_depth: int, cubic_upsample: int = 8) -> dict:
-    """Builds the stream once, computes the signature ONCE at max_depth,
-    then for every depth in `depths` (all <= max_depth) prefix-slices that
-    single computation (verified exact, see module docstring) and reports
-    per-line AUCs, rescaled the same way the existing pipeline does
-    (r re-derived per depth via choose_rescale_factor, unmodified).
-    """
+    """Builds the stream, computes the signature once at max_depth, then scores every depth in
+    depths by slicing that result and computing per-line AUCs. Returns a dict keyed by depth."""
     stream = build_stream(images, angles_deg, counts, points_per_line, interpolation, cubic_upsample)
     num_lines = stream.shape[1]
 
@@ -163,13 +123,8 @@ INTERPOLATION_VARIANTS = ("linear", "cubic")
 
 
 def run_stage_a_sweep(n_per_class: int = 15, seed: int = 0, verbose: bool = True) -> list:
-    """Full joint sweep (per README.md's Stage 8 note: "sweep together, not
-    staged one-at-a-time") over geometry x points x depth x interpolation.
-    Depth is handled cheaply via the max-depth-then-slice shortcut above,
-    so the actual expensive-computation grid is geometry x points x
-    interpolation (4 x 4 x 2 = 32 stream/signature builds), each scored at
-    all 5 depths (160 total scored configs).
-    """
+    """Full joint sweep over geometry, points per line, depth, and interpolation. 
+    Returns the scored configurations, sorted by best per-line AUC."""
     images, labels = load_eval_pool(n_per_class=n_per_class, seed=seed)
     max_depth = max(DEPTH_VARIANTS)
 
@@ -198,16 +153,14 @@ def run_stage_a_sweep(n_per_class: int = 15, seed: int = 0, verbose: bool = True
     rows.sort(key=lambda row: row["best_auc"], reverse=True)
     return rows
 
-
 # ---------------------------------------------------------------------------
 # Stage B: full validation on finalists
 # ---------------------------------------------------------------------------
 
-
 def _config_signatures(images: torch.Tensor, angles_deg: tuple, counts: tuple,
                         points_per_line: int, depth: int, interpolation: str,
                         cubic_upsample: int = 8) -> torch.Tensor:
-    """Raw (unrescaled) per-line signatures for one finalist config."""
+    """Raw (unrescaled) per-line signatures for one finalist configuration."""
     stream = build_stream(images, angles_deg, counts, points_per_line, interpolation, cubic_upsample)
     num_lines = stream.shape[1]
     return torch.stack(
@@ -217,23 +170,10 @@ def _config_signatures(images: torch.Tensor, angles_deg: tuple, counts: tuple,
 
 def run_stage_b_validation(finalists: list, n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05),
                             seed: int = 0, verbose: bool = True) -> dict:
-    """Full per-path adversarial/control evaluation for each finalist
-    config, same framework as adversarial_eval.run_per_path_adversarial_eval (FGSM, matched
-    random control, margin-difference numerator, per-line distances -
-    reused unmodified via models.py/attacks.py/distances.py
-    imports), applied to each finalist's own stream construction instead
-    of the fixed baseline geometry.
-
-    Loads the shared canonical SmallCNN/StrongCNN checkpoint ONCE (no
-    training - see `adversarial_eval.run_pgd_comparison`'s docstring for
-    why) and reuses it across every finalist - and the FGSM/control
-    perturbations (model/epsilon-dependent only, not Method-B-config-
-    dependent) are likewise computed once per model/epsilon and reused,
-    not regenerated per finalist.
-
-    finalists: list of dicts with keys name, angles_deg, counts,
-    points_per_line, depth, interpolation.
-    """
+    """Full per-path adversarial/control evaluation for each finalist configuration: FGSM, matched
+    random control, margin-difference numerator, per-line distances. Loads the shared canonical
+    checkpoint once and reuses the same perturbations across every finalist. finalists is a list of
+    dicts with keys name, angles_deg, counts, points_per_line, depth, interpolation."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:

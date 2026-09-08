@@ -1,39 +1,11 @@
-"""Truncated signature computation, shared by both methods' 2D
-`[t, value]` streams (Method A's `patch_sv_stream`, Method B's
-`line_stream`) - see README.md Phase 2.
+"""Truncated signature computation, shared by both methods' 2D [t, value] streams.
 
-Built on roughpy_jax's low-level, JAX-native primitives (`Lie`, `cbh`,
-`to_signature`) rather than its higher-level `Stream` object wrappers
-(`LieIncrementStream` / `PiecewiseAbelianStream`): those primitives are
-`custom_vjp`-registered JAX functions, so `jax.vmap` batches this cleanly
-(verified below), and their behavior is fully pinned down by two closed-form
-checks (a straight line's exact tensor-exponential signature, and an
-L-shaped path's hand-computed area term) rather than inferred from sparse
-docs on the Stream classes.
+Built on roughpy_jax's low-level JAX-native primitives (Lie, cbh, to_signature) rather than its
+Stream object wrappers, so jax.vmap batches cleanly. Verified against two closed-form checks: a
+straight line's exact tensor-exponential signature, and an L-shaped path's hand-computed area
+term.
 
-Each stream is piecewise-linear by construction (straight-line interpolation
-between consecutive sampled points, per README.md's Method A/B design). For a
-single straight segment, the log-signature at any truncation depth is
-*exactly* its degree-1 displacement vector (a straight line has no
-higher-order/area terms) - so each increment is a pure "abelian" Lie element,
-and `cbh` (Campbell-Baker-Hausdorff) combines the whole sequence of segments
-into the log-signature of the complete path, matching Chen's identity.
-
-**float32 caveat, not fixed by this package's float64 convention.** JAX
-defaults to float32 and stays there unless `jax.config.update
-("jax_enable_x64", True)` is set explicitly - `signature_of_stream` below
-hardcodes `jnp.float32` on the way in and `torch.float32` on the way out,
-independent of `torch.get_default_dtype()`. So even though the rest of this
-package (models, attacks, streams, distances built from raw pixels) is
-float64, every actual signature this function produces - and everything
-computed from it (`method_a_signature_distance`, `method_b_signature_distance`,
-every per-line/per-segment distance) - is float32 internally, silently
-promoted to float64 only when later combined with a genuinely-float64
-tensor (e.g. divided by a float64 margin numerator). This is a real,
-pre-existing precision ceiling on the signature side specifically, not
-something `torch.set_default_dtype(torch.float64)` reaches - enabling true
-float64 here would need JAX's x64 mode turned on too, a separate, untested
-change not made as part of this reorganization.
+Signatures are computed and returned in float32. Values are only promoted to float64 once combined with a float64 tensor downstream.
 """
 
 import numpy as np

@@ -1,18 +1,12 @@
-"""Plotting for signature_distance: Method A (patch singular-value stream),
-Method B (reference-line stream), Method C (Hilbert curve), and the
-headline/spike-gallery figures built on top of the adversarial-eval
-results.
-
-Pure plotting: takes already-computed data (images, pixel orders/lines,
-streams, signatures, or an adversarial-eval results dict) and produces
-matplotlib figures, optionally saved to disk. No stream/signature/
-adversarial computation happens here - see streams.py / data_pool.py /
-signatures.py / distances.py / adversarial_eval.py.
+"""Plotting for signature_distance: 
+Method A (patch singular-value stream),
+Method B (reference-line stream), 
+Method C (Hilbert curve), 
+and the headline/spike-gallery figures built on top of the adversarial-eval results.
 """
 
 import matplotlib.pyplot as plt
 import torch
-
 from signature_distance.adversarial_eval import INFORMATIVE_LINE_INDICES
 from signature_distance.distances import METHOD_B_LINES
 from signature_distance.streams import POINTS_PER_SEGMENT
@@ -22,8 +16,7 @@ torch.set_default_dtype(torch.float64)
 
 def plot_pixel_order(image: torch.Tensor, pixel_order: torch.Tensor,
                       title: str = None, save_path=None):
-    """Method A: image with sampled (row, col) locations overlaid, colored
-    by visiting order (t)."""
+    """Method A: image with sampled pixel locations overlaid, coloured by visiting order."""
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.imshow(image, cmap="gray", vmin=0, vmax=1)
     order_idx = torch.arange(pixel_order.shape[0])
@@ -38,7 +31,7 @@ def plot_pixel_order(image: torch.Tensor, pixel_order: torch.Tensor,
 
 
 def plot_patch_sv_stream(stream: torch.Tensor, title: str = None, save_path=None):
-    """Method A: sigma1 vs. t for one image's (K, 2) stream."""
+    """Method A: singular value vs position for one image's stream."""
     fig, ax = plt.subplots(figsize=(5, 3))
     ax.plot(stream[:, 0], stream[:, 1], marker="o", markersize=3)
     ax.set_xlabel("t")
@@ -50,8 +43,7 @@ def plot_patch_sv_stream(stream: torch.Tensor, title: str = None, save_path=None
 
 
 def plot_signature(sig: torch.Tensor, title: str = None, save_path=None):
-    """Method-agnostic: bar chart of one signature vector's coefficients
-    (index 0 is always the constant term, 1.0)."""
+    """Bar chart of one signature vector's coefficients."""
     fig, ax = plt.subplots(figsize=(6, 3))
     ax.bar(range(sig.shape[0]), sig, color="blue")
     ax.set_xlabel("signature term index")
@@ -63,11 +55,7 @@ def plot_signature(sig: torch.Tensor, title: str = None, save_path=None):
 
 
 def plot_line_signatures(sig_batch: torch.Tensor, title: str = None, save_path=None):
-    """Method B: heatmap of per-line signatures, one row per line.
-
-    sig_batch: (num_lines, signature_dim), e.g. the 16 independent
-    per-line signatures for one image (never concatenated into one raw
-    stream before this point - each row is its own line's signature)."""
+    """Method B: heatmap of per-line signatures, one row per line."""
     fig, ax = plt.subplots(figsize=(6, 4))
     im = ax.imshow(sig_batch, aspect="auto", cmap="viridis")
     ax.set_xlabel("signature term index")
@@ -81,9 +69,7 @@ def plot_line_signatures(sig_batch: torch.Tensor, title: str = None, save_path=N
 
 def plot_reference_lines(image: torch.Tensor, lines: torch.Tensor,
                           title: str = None, save_path=None):
-    """Method B: image with reference lines overlaid, colored by
-    orientation (horizontal vs. vertical, inferred per line from whether
-    its row-coordinate or column-coordinate range is larger)."""
+    """Method B: image with reference lines overlaid, coloured by orientation."""
     fig, ax = plt.subplots(figsize=(4, 4))
     ax.imshow(image, cmap="gray", vmin=0, vmax=1)
     for line in lines:
@@ -99,8 +85,7 @@ def plot_reference_lines(image: torch.Tensor, lines: torch.Tensor,
 
 
 def plot_line_stream(stream: torch.Tensor, title: str = None, save_path=None):
-    """Method B: intensity vs. t for every line of one image's
-    (num_lines, points_per_line, 2) stream, one curve per line."""
+    """Method B: intensity vs position for every line of one image's stream, one curve per line."""
     fig, ax = plt.subplots(figsize=(5, 3))
     num_lines = stream.shape[0]
     cmap = plt.get_cmap("viridis")
@@ -116,11 +101,8 @@ def plot_line_stream(stream: torch.Tensor, title: str = None, save_path=None):
 
 
 def plot_per_line_auc_ranking(ranked: list, title: str = None, save_path=None):
-    """Method B: bar chart of same/different-digit AUC per measure (16
-    individual lines + the merged 496-dim distance), ranked highest to
-    lowest, from `distances.run_per_line_auc_diagnostic`'s
-    `ranked` output. The merged bar is colored differently so it's easy to
-    see how many individual lines rank above/below it."""
+    """Method B: same/different-digit AUC per measure (16 lines plus the merged distance), ranked
+    highest to lowest, with the merged bar coloured separately."""
     fig, ax = plt.subplots(figsize=(8, 4))
     names = [name for name, _ in ranked]
     aucs = [entry["auc"] for _, entry in ranked]
@@ -141,12 +123,8 @@ def plot_reference_lines_with_metric(image: torch.Tensor, lines: torch.Tensor,
                                       metric_values, title: str = None,
                                       colorbar_label: str = "metric",
                                       cmap: str = "plasma", save_path=None):
-    """Method B: image with reference lines overlaid, each colored by a
-    per-line metric (e.g. fold-ratio, AUC) instead of orientation - shows
-    directly where on the image the highest/lowest-scoring lines sit.
-
-    metric_values: sequence of length lines.shape[0], one value per line,
-    in the same order as `lines`."""
+    """Method B: image with reference lines overlaid, each coloured by a given per-line metric (e.g.
+    fold-ratio, AUC)."""
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.imshow(image, cmap="gray", vmin=0, vmax=1)
     values = torch.as_tensor(metric_values, dtype=torch.float32)
@@ -167,10 +145,7 @@ def plot_reference_lines_with_metric(image: torch.Tensor, lines: torch.Tensor,
 
 
 def plot_ratio_distribution(ratio_adv, ratio_control, title: str = None, save_path=None):
-    """Histogram of adversarial vs. control ratio values for one distance
-    measure - shows whether it separates genuinely adversarial
-    perturbations from equally-sized random ones (bimodal, minimal
-    overlap = clear separation)."""
+    """Histogram of adversarial vs control ratio values for one distance measure."""
     fig, ax = plt.subplots(figsize=(5.5, 3.5))
     adv = ratio_adv.detach().cpu().numpy() if torch.is_tensor(ratio_adv) else ratio_adv
     ctrl = ratio_control.detach().cpu().numpy() if torch.is_tensor(ratio_control) else ratio_control
@@ -187,9 +162,7 @@ def plot_ratio_distribution(ratio_adv, ratio_control, title: str = None, save_pa
 
 def plot_per_line_bar(values: dict, title: str = None, ylabel: str = "value",
                        highlight_key=None, save_path=None):
-    """Generic labeled bar chart over a {label: value} dict - e.g. per-line
-    fold-ratios. `highlight_key`, if given, colors that one bar
-    differently (e.g. the single best-performing line)."""
+    """Labelled bar chart over a {label: value} dict, with an optional single bar highlighted."""
     fig, ax = plt.subplots(figsize=(8, 3.5))
     labels = list(values.keys())
     vals = list(values.values())
@@ -211,9 +184,8 @@ def plot_per_line_bar(values: dict, title: str = None, ylabel: str = "value",
 
 def plot_hilbert_curve(image: torch.Tensor, curve: torch.Tensor,
                         title: str = None, save_path=None):
-    """Image with the Hilbert curve overlaid, colored by position along
-    the curve (dark to light = start to end), with the 16 segment
-    boundaries marked."""
+    """Image with the Hilbert curve overlaid, coloured by position along the curve, with the 16
+    segment boundaries marked."""
     fig, ax = plt.subplots(figsize=(4.5, 4.5))
     ax.imshow(image, cmap="gray", vmin=0, vmax=1)
     cmap = plt.get_cmap("viridis")
@@ -231,8 +203,7 @@ def plot_hilbert_curve(image: torch.Tensor, curve: torch.Tensor,
 
 
 def plot_hilbert_segment_streams(stream: torch.Tensor, title: str = None, save_path=None):
-    """Intensity vs. t for every segment of one image's Hilbert stream,
-    one curve per segment - same style as Method B's per-line stream plot."""
+    """Intensity vs position for every segment of one image's Hilbert stream, one curve per segment."""
     fig, ax = plt.subplots(figsize=(5, 3))
     num_segments = stream.shape[0]
     cmap = plt.get_cmap("viridis")
@@ -248,8 +219,7 @@ def plot_hilbert_segment_streams(stream: torch.Tensor, title: str = None, save_p
 
 
 def plot_hilbert_signatures(sig: torch.Tensor, title: str = None, save_path=None):
-    """Heatmap of all 16 segments' signatures, one row per segment - same
-    style as Method B's per-line signature heatmap."""
+    """Heatmap of all 16 Hilbert segments' signatures, one row per segment."""
     fig, ax = plt.subplots(figsize=(6, 4))
     im = ax.imshow(sig, aspect="auto", cmap="viridis")
     ax.set_xlabel("signature term index")
@@ -262,8 +232,7 @@ def plot_hilbert_signatures(sig: torch.Tensor, title: str = None, save_path=None
 
 
 def plot_depth_comparison(depth_results: dict, title: str = None, save_path=None):
-    """Bar chart of best-segment and mean AUC per depth, from
-    distances.evaluate_hilbert_depths' output."""
+    """Bar chart of best-segment and mean AUC per depth."""
     depths = sorted(depth_results.keys())
     best = [depth_results[d]["best_auc"] for d in depths]
     mean = [depth_results[d]["mean_auc"] for d in depths]
@@ -286,17 +255,12 @@ def plot_depth_comparison(depth_results: dict, title: str = None, save_path=None
 
 
 # ---------------------------------------------------------------------------
-# Headline punchline (FGSM/PGD, Method B vs. Method C)
+# Headline(FGSM/PGD, Method B vs. Method C)
 # ---------------------------------------------------------------------------
 
-
 def plot_headline_punchline(data: dict, title: str = None, save_path=None):
-    """Three-panel presentation figure: clean test accuracy, FGSM
-    adversarial accuracy at `data['primary_eps']`, and the
-    `data['quantile']`-quantile local Lipschitz estimate (Method B bars,
-    Method C as an overlaid marker), grouped by model - all three panels
-    share the model x-axis so the two models line up across panels.
-    Every bar/marker is labeled with its actual value."""
+    """Three-panel figure: clean test accuracy, adversarial accuracy, and the headline quantile local
+    Lipschitz estimate, grouped by model, Method B as bars and Method C as an overlaid marker."""
     models = list(data["models"].keys())
     eps = data["primary_eps"]
     q_pct = int(round(data["quantile"] * 100))
@@ -353,14 +317,9 @@ def plot_headline_punchline(data: dict, title: str = None, save_path=None):
 
 
 def plot_headline_ci(data: dict, title: str = None, save_path=None):
-    """Two-panel figure (clean, adversarial), each a grouped bar chart of
-    Method B's P90 point estimate +/- bootstrap CI for SmallCNN vs.
-    StrongCNN, with Method C's point estimate +/- CI overlaid as an error-
-    barred marker - same visual language (bars = Method B, markers =
-    Method C) as `plot_headline_punchline`'s third panel, now with the
-    sampling uncertainty made visible. `data` is
-    `headline_bootstrap.collect_headline_bootstrap`'s (or
-    `collect_pgd_headline`'s) output."""
+    """Two-panel figure (clean, adversarial): grouped bar chart of Method B's P90 point estimate with
+    bootstrap CI for SmallCNN vs StrongCNN, with Method C's point estimate and CI overlaid as
+    error-barred markers."""
     models = list(data["models"].keys())
     ci_pct = int(round(data["ci_level"] * 100))
 
@@ -399,11 +358,8 @@ def plot_headline_ci(data: dict, title: str = None, save_path=None):
 
 def plot_spike_gallery(results: dict, model_name: str, eps: float, pair_idx: int,
                         title: str = None, save_path=None):
-    """Original image, perturbed image, and the 16 reference lines overlaid
-    with the single largest-ratio INFORMATIVE line for this specific pair
-    drawn thick/red, the rest thin/gray - the interpretable per-pair
-    output: is the adversarial change concentrated on one path or not,
-    shown directly on the image it happened to."""
+    """Original and perturbed image with the 16 reference lines overlaid, the single largest-ratio
+    informative line drawn thick, the rest thin."""
     e = results["models"][model_name]["eps"][eps]
     image = results["images"][pair_idx]
     x_adv = e["x_adv"][pair_idx]
@@ -441,13 +397,8 @@ def plot_spike_gallery(results: dict, model_name: str, eps: float, pair_idx: int
 
 def plot_hilbert_spike_gallery(results: dict, model_name: str, eps: float, pair_idx: int,
                                 title: str = None, save_path=None):
-    """Method C equivalent of `plot_spike_gallery`: original image,
-    perturbed image, and the Hilbert curve overlaid with the single
-    largest-ratio segment drawn thick/red, the rest thin/gray. All 16
-    segments are eligible (unlike Method B's gallery, which excludes 4
-    structural border lines) - Stage A's depth sweep found every Hilbert
-    segment carries above-chance signal, so there's no degenerate subset to
-    exclude here."""
+    """Method C equivalent of plot_spike_gallery: original and perturbed image with the Hilbert curve
+    overlaid, the single largest-ratio segment drawn thick, the rest thin."""
     e = results["models"][model_name]["eps"][eps]
     image = results["images"][pair_idx]
     x_adv = e["x_adv"][pair_idx]
@@ -484,14 +435,8 @@ def plot_hilbert_spike_gallery(results: dict, model_name: str, eps: float, pair_
 
 def plot_spike_comparison(results_b: dict, results_c: dict, model_name: str, eps: float,
                            pair_idx: int, title: str = None, save_path=None):
-    """Side-by-side comparison on the SAME original/perturbed pair: original
-    image, Method B's spike overlay (largest-ratio reference line), Method
-    C's spike overlay (largest-ratio Hilbert segment) - lets a reader see
-    directly whether the two methods' signal concentrates on the same
-    region of the image or not.
-
-    `results_b`/`results_c` must come from the same eval pool/seed/model/eps
-    (checked via an assert on the perturbed image itself, not assumed)."""
+    """Side-by-side comparison on the same pair: original image, Method B's spike overlay, and Method
+    C's spike overlay, for comparing where each method's signal concentrates."""
     e_b = results_b["models"][model_name]["eps"][eps]
     e_c = results_c["models"][model_name]["eps"][eps]
 

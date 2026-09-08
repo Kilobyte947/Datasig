@@ -1,9 +1,8 @@
-"""This file loads MNIST data, and hands back three views of the same pixels: 
-1. flattened 784-dimensional vectors (what the estimators actually operate on)
-2. the original 28x28 image shape (needed for the CNN, which expects a 2D image structure to run its convolution filters over)
-3. integer digit labels
+"""Loads MNIST and hands back three views of the same pixels: 
+flattened 784-dimensional vectors, the original 28x28 image shape, and integer labels.
 
-Pixel values are kept in [0, 1] (ToTensor() only, no ImageNet-style Normalize) so that raw pixel differences remain directly interpretable.
+Pixel values are kept in [0, 1] (no further normalisation), so raw pixel differences remain
+directly interpretable.
 """
 
 from dataclasses import dataclass
@@ -29,7 +28,7 @@ class MNISTData:
 
 
 def load_mnist(root=DATA_ROOT, train=True):
-    """Load the MNIST dataset and return it as a MNISTData dataclass."""
+    """Loads MNIST and returns it as an MNISTData dataclass."""
     transform = transforms.ToTensor()  # scales uint8 [0,255] -> float32 [0,1], no further normalization
     dataset = datasets.MNIST(root=str(root), train=train, download=True, transform=transform)
     loader = DataLoader(dataset, batch_size=len(dataset), shuffle=False)
@@ -42,7 +41,7 @@ def load_mnist(root=DATA_ROOT, train=True):
 
 
 def get_dev_subset(data, n, seed):
-    """A small, fixed, seeded subset of `data` for fast iteration during development. 
+    """A small, fixed subset of data, for fast iteration during development. 
     Same seed always returns the same subset."""
     generator = torch.Generator().manual_seed(seed)
     idx = torch.randperm(len(data), generator=generator)[:n]
@@ -50,13 +49,8 @@ def get_dev_subset(data, n, seed):
 
 
 def stratified_subset_idx(y, n_points, seed, exclude_idx=None):
-    """Return a stratified subset of indices from y, with n_points total, evenly distributed across classes. 
-    Important as MNIST is imbalanced and random sampling would have added its own noise on top, especially for small n_points.
-    
-    If `exclude_idx` is provided, those indices are excluded from the sampling - 
-    useful for creating a validation set (`query set`) that is disjoint from the training set. 
-    Used in sub-method comparison and ratio-distribution set.
-    """
+    """A stratified subset of n_points indices from y, evenly split across classes. exclude_idx, if 
+    given, is excluded from sampling — for building a query set disjoint from the training set."""
     generator = torch.Generator().manual_seed(seed)
     classes = torch.unique(y)
     n_per_class = n_points // len(classes)
@@ -80,7 +74,7 @@ def stratified_subset_idx(y, n_points, seed, exclude_idx=None):
 
 
 def make_loader(x, y, batch_size=128, shuffle=True, seed=None):
-    """Make a DataLoader from x and y tensors, with optional shuffling and seeding."""
+    """Builds a DataLoader from x and y, with optional shuffling and seeding."""
     dataset = TensorDataset(x, y)
     if shuffle and seed is not None:
         generator = torch.Generator().manual_seed(seed)

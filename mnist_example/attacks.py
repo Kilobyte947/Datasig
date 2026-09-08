@@ -1,9 +1,7 @@
 """FGSM (Goodfellow et al. 2015) and PGD (Madry et al. 2018) adversarial example generation.
 
-`model` here is expected to accept flat (N, 784) pixel input and return (N, num_classes) raw
-logits -- the same flat-input convention every estimator in mnist_example/estimators.py uses,
-so a trained SmallCNN must be wrapped in `models.FlattenedInputWrapper` before being passed in
-here, exactly as layer_decomposition.py does for its own L_full computation.
+model must accept flat (N, 784) pixel input and return (N, num_classes) logits — wrap a trained
+SmallCNN in models.FlattenedInputWrapper first.
 """
 
 import torch
@@ -13,24 +11,13 @@ torch.set_default_dtype(torch.float64)
 
 
 def _generator(seed):
+    """A seeded torch.Generator, or None if seed is None."""
     return torch.Generator().manual_seed(seed) if seed is not None else None
 
 
 def fgsm_attack(model, x, y, epsilon, loss_fn=None):
     """Single-step FGSM: x_adv = clip(x + epsilon * sign(grad_x loss(model(x), y)), 0, 1).
-
-    `loss_fn(logits, y) -> scalar`, defaulting to `torch.nn.functional.cross_entropy` (mean
-    reduction) -- the loss FGSM/PGD classically maximize, which is a *different* objective from
-    the Euclidean logit-space ratio (`achieved_ratio` in run_experiment.py) this sub-experiment
-    ultimately measures; see that module's docstring for why the distinction matters.
-
-    `epsilon=0` returns `x` unchanged (up to the `[0, 1]` clamp, which is a no-op for already
-    valid pixel input): `sign(grad) * 0 == 0` regardless of the gradient's value.
-
-    Returns x_adv, clipped to the valid pixel range `[0, 1]` (MNIST pixels live in `[0, 1]`, see
-    data.py -- there is no separate epsilon-ball projection here since a single step's maximum
-    excursion is already exactly `epsilon` in every coordinate).
-    """
+    loss_fn defaults to cross-entropy. Returns x_adv, clipped to [0, 1]."""
     loss_fn = loss_fn or F.cross_entropy
     x = x.detach().clone().requires_grad_(True)
     loss = loss_fn(model(x), y)
@@ -40,31 +27,10 @@ def fgsm_attack(model, x, y, epsilon, loss_fn=None):
 
 
 def pgd_attack(model, x, y, epsilon, alpha, num_steps, num_restarts=1, loss_fn=None, seed=None):
-    """Multi-step projected gradient ascent on `loss_fn` (see `fgsm_attack`'s docstring for why
-    this is a different objective from the ratio measured afterward), within the L_inf epsilon
-    ball around `x` and the valid `[0, 1]` pixel range.
-
-    Restart 0 always starts from the clean `x` itself (no randomization). This is deliberate, not
-    an oversight: it guarantees that `pgd_attack(..., num_steps=1, alpha=epsilon, num_restarts=1)`
-    performs the exact same single gradient step as `fgsm_attack` -- FGSM is a special case of
-    PGD's search, not a separate code path -- which is checked directly in
-    `tests/test_attacks.py`, not just asserted. Every restart beyond the first (`num_restarts >
-    1`) starts from a point drawn uniformly at random from the epsilon ball (clipped to `[0, 1]`),
-    per Madry et al. 2018's recommended practice for escaping local optima a single deterministic
-    start might land in.
-
-    Across restarts, the returned `x_adv` is selected **per example** (not per batch): whichever
-    restart's final iterate achieves the higher loss for that specific point. The comparison
-    always uses plain cross-entropy with `reduction="none"` -- independent of whatever `loss_fn`
-    drove the per-step gradient ascent -- since an arbitrary custom `loss_fn` isn't guaranteed to
-    support `reduction="none"`, and only a per-example scalar is needed to compare restarts, not
-    the attack's actual optimization objective.
-
-    At every step, the gradient-ascent update is clamped first to the L_inf epsilon ball around
-    `x` (`[x - epsilon, x + epsilon]`), then to the valid pixel range `[0, 1]` -- both are
-    per-coordinate interval constraints, so this successive clamping is exactly equivalent to
-    projecting onto their intersection in one step, not an approximation.
-    """
+    """Multi-step projected gradient ascent on loss_fn, within the L-infinity epsilon ball around x
+    and the valid [0, 1] pixel range. The first restart starts from x itself; further restarts start
+    from a random point in the epsilon ball. Returns the per-example best x_adv across restarts, by
+    cross-entropy loss."""
     loss_fn = loss_fn or F.cross_entropy
     generator = _generator(seed)
     x = x.detach()

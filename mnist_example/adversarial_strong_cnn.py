@@ -1,44 +1,4 @@
-"""StrongCNN variant of the adversarial-vs-Lipschitz-bound comparison (`run_experiment.py`).
-
-`StrongCNN` (`models.py`) has no `.extractor`/`.head` submodule split (unlike `SmallCNN`) --
-`layer_decomposition.py`'s own docstring explicitly excludes it: "this model isn't part of" that
-sub-experiment. But `StrongCNN.classifier[4]` (the FINAL layer of its classifier) IS a plain
-`nn.Linear` with nothing nonlinear after it, so the same tight/loose Lipschitz-bound comparison
-`layer_decomposition.py` performs for `SmallCNN` is still possible here via an EXTERNALLY
-constructed extractor/head split (`model.features` + `model.classifier[:4]` as "extractor",
-`model.classifier[4]` as "head"), without modifying `models.py` or `layer_decomposition.py` --
-following the same "reuse, never edit `layer_decomposition.py`" precedent this package's own
-`compute_bounds_with_distance_fn` already established for the Mahalanobis generalization (see its
-docstring).
-
-**Scope**: baseline only (one trained checkpoint, Euclidean + Mahalanobis, FGSM/PGD, WITH the
-tight/loose bound comparison) -- no CNN-width sweep (`StrongCNN`'s conv channels are hardcoded,
-not a constructor parameter, unlike `SmallCNN`'s) and no multi-seed pilot
-(`seed_sweep.py`'s pattern). Both deliberately out of scope for this module.
-
-**Eval-mode discipline (the one genuinely new correctness concern vs. `SmallCNN`)**: `SmallCNN`
-has no `BatchNorm`/`Dropout`, so nothing in this codebase has ever needed to care about
-train/eval mode -- every existing function silently assumes deterministic, batch-composition-
-independent behavior, which is only true for `SmallCNN`. `StrongCNN` has `BatchNorm1d`/
-`Dropout2d`/`Dropout`, so every function below that forwards data through the model REQUIRES
-`model.eval()` to already be active, and RAISES `ValueError` rather than silently calling
-`.eval()` itself if it isn't -- a caller who forgot to set eval mode has a bug worth surfacing
-loudly (BatchNorm in train mode uses per-BATCH statistics, so a bound/attack computation would
-silently depend on which other points happen to share a batch -- exactly the kind of numerical
-footgun this whole sub-experiment exists to catch, not paper over). `attacks.py`
-(`fgsm_attack`/`pgd_attack`) never touches train/eval mode itself, so `main()`'s single explicit
-`.eval()` call (right after training) is what keeps every downstream computation correct.
-
-**Weaker checkpoint-gating than the SmallCNN machinery, stated explicitly**: `compute_bounds_with_
-distance_fn`'s central correctness checkpoint (`tests/test_adversarial_mahalanobis.py`) proves it reduces to
-EXACTLY `layer_decomposition_experiment`'s own independently-existing numbers. No such
-independently-existing reference exists for `StrongCNN` (`layer_decomposition.py` was never
-extended to it). `tests/test_adversarial_strong_cnn.py`'s parity test is therefore only a
-SELF-consistency check (does `compute_strong_cnn_bounds` reduce to a from-scratch manual
-`pairwise_lipschitz` call using the same closures) -- necessary, but not as strong a checkpoint as
-the SmallCNN precedent.
-"""
-
+"""StrongCNN variant of the adversarial-vs-Lipschitz-bound comparison."""
 import torch
 
 from mnist_example.data import load_mnist, make_loader
@@ -49,10 +9,6 @@ from mnist_example.augmentation import random_affine_augment
 from mnist_example.estimators import pairwise_lipschitz, linear_layer_lipschitz, euclidean_distance_fn
 from mnist_example.layer_decomposition import (
     full_logits_output_fn,
-    # Underscore-prefixed ("module-private") in layer_decomposition.py, but imported here
-    # deliberately -- same precedent adversarial/run_experiment.py's compute_bounds_with_
-    # distance_fn already established: this helper only needs an nn.Linear + optional std, is
-    # architecture-agnostic, and re-deriving it independently would risk silent drift.
     _effective_head_lipschitz_exact,
 )
 from mnist_example.adversarial_run_experiment import (
@@ -66,62 +22,34 @@ torch.set_default_dtype(torch.float64)
 
 
 def _require_eval_mode(model, fn_name):
+    """Raises ValueError if model is in train() mode."""
     if model.training:
         raise ValueError(
             f"{fn_name}: model is in train() mode. StrongCNN has BatchNorm1d/Dropout2d/Dropout, "
             f"so every quantity this function computes would depend on which other points share "
             f"a batch (BatchNorm) or would be non-deterministic (Dropout) unless model.eval() is "
-            f"active. Call model.eval() before calling this function -- not done silently here, "
-            f"since a caller who forgot is a bug worth surfacing, not hiding.")
+            f"active. Call model.eval() before calling {fn_name}.")
 
 
 def strong_cnn_extractor_fn(model, x, y):
-    """output_fn wrapper for everything in `StrongCNN` up to (not including) the final linear
-    layer: flat (N, 784) pixel input, reshaped to (N,1,28,28), through `model.features` (the
-    conv/BatchNorm2d/ReLU/MaxPool2d/Dropout2d stack) then `model.classifier[:4]`
-    (`Linear(3136,256) -> BatchNorm1d -> ReLU -> Dropout`, i.e. `model.classifier` minus its
-    final `nn.Linear`). Returns (N, 256). `y` unused, accepted only to match every other
-    `output_fn`'s `(model, x, y)` convention in this project.
-
-    Requires `model.eval()` already active -- see this module's docstring.
-    """
+    """output_fn for everything in StrongCNN up to (not including) the final linear layer. Returns (N, 256)."""
     _require_eval_mode(model, "strong_cnn_extractor_fn")
     features = model.features(x.reshape(x.shape[0], 1, 28, 28))
     return model.classifier[:4](features)
 
 
 def strong_cnn_head_module(model):
-    """The final `nn.Linear(256, num_classes)` of `model.classifier` -- the "head", analogous to
-    `SmallCNN.head`. `model.classifier[4]` is the LAST layer with nothing nonlinear after it
-    (`model.classifier` is `[Linear, BatchNorm1d, ReLU, Dropout, Linear]`), so
-    `model(x) == model.classifier[4](strong_cnn_extractor_fn(model, x, y))` exactly -- checked
-    directly in `tests/test_adversarial_strong_cnn.py`.
-    """
+    """The final nn.Linear layer of model.classifier."""
     return model.classifier[4]
 
 
 def full_logits_fn(model, x, y):
-    """output_fn wrapper for the full network: flat (N, 784) input, full (N, num_classes) logit
-    output. `model` must already accept flat input (`FlattenedInputWrapper`-wrapped). Identical
-    role to `layer_decomposition.full_logits_output_fn` -- re-exported under this module's own
-    name for a self-contained import list, but delegates to the same architecture-agnostic
-    function (it only ever calls `model(x)`, no StrongCNN-specific logic needed).
-    """
+    """output_fn for the full network's logits."""
     return full_logits_output_fn(model, x, y)
 
 
 def fit_strong_cnn_feature_normalizer(model, x_train, relative_floor=1e-2, absolute_floor=1e-8):
-    """Fits a per-dimension (mean, std) on `strong_cnn_extractor_fn(model, x_train, None)`, once
-    -- same role and floor formula as `layer_decomposition.fit_feature_normalizer`
-    (`max(relative_floor * median(raw_std), absolute_floor)`, regression-tested there against a
-    real dead-ReLU-unit bug on `SmallCNN`), applied here to `StrongCNN`'s 256-d penultimate layer
-    instead of `SmallCNN`'s 1568-d one. Re-implemented (not imported) because the original calls
-    `extractor_output_fn`, which is `SmallCNN`-specific.
-
-    Requires `model.eval()` already active (enforced inside `strong_cnn_extractor_fn`).
-
-    Returns (mean, std), each shape (256,).
-    """
+    """Fits per-dimension mean and std on the extractor's output. Returns (mean, std), each shape (256,)."""
     with torch.no_grad():
         features = strong_cnn_extractor_fn(model, x_train, None)
     mean = features.mean(dim=0)
@@ -132,6 +60,7 @@ def fit_strong_cnn_feature_normalizer(model, x_train, relative_floor=1e-2, absol
 
 
 def _make_normalized_strong_cnn_extractor_fn(mean, std):
+    """Wraps strong_cnn_extractor_fn to standardize its output by (mean, std)."""
     def _fn(model, x, y):
         return (strong_cnn_extractor_fn(model, x, y) - mean) / std
     return _fn
@@ -139,23 +68,8 @@ def _make_normalized_strong_cnn_extractor_fn(mean, std):
 
 def compute_strong_cnn_bounds(model, x_query, y_query, distance_fn, x_train_for_norm,
                                normalize_features=True, max_pairs=None, seed=0, verbose=True):
-    """StrongCNN analogue of `run_experiment.compute_bounds_with_distance_fn`: computes
-    `L_head_exact`/`L_extractor_estimated`/`L_full_estimated`/`product`/`looseness_ratio` for a
-    trained `StrongCNN`, under an arbitrary pixel-space `distance_fn`.
-
-    Requires `model.eval()` already active -- raises `ValueError` otherwise (see this module's
-    docstring).
-
-    `model`: a trained, raw `StrongCNN` (not `FlattenedInputWrapper`-wrapped -- wrapped
-    internally here for the `L_full_estimated` computation, matching
-    `compute_bounds_with_distance_fn`'s own convention).
-    `x_train_for_norm`: training-set sample to fit the feature standardizer on, kept separate
-    from `x_query` (same reasoning as `layer_decomposition_experiment`'s own docstring).
-
-    Returns {"L_head_exact", "L_extractor_estimated", "L_full_estimated", "product",
-    "looseness_ratio"} -- same keys `compute_bounds_with_distance_fn`/
-    `layer_decomposition_experiment` use, so this can be handed to the same downstream code.
-    """
+    """L_head_exact, L_extractor_estimated, L_full_estimated, product and looseness_ratio for a 
+    trained StrongCNN, under a given pixel-space distance function. Returns a dict of those five values."""
     _require_eval_mode(model, "compute_strong_cnn_bounds")
     wrapped_model = FlattenedInputWrapper(model)
 
@@ -198,18 +112,9 @@ def compute_strong_cnn_bounds(model, x_query, y_query, distance_fn, x_train_for_
 
 
 def strong_cnn_head_layer_bound_check(model, example):
-    """StrongCNN analogue of `run_experiment.head_layer_bound_check`: for one attacked example,
-    compares the Euclidean distance between the (raw, un-standardized) penultimate features of
-    the clean vs. adversarial input against the final linear layer's own exact Lipschitz bound.
-
-    `model`: the raw, trained `StrongCNN` (not `FlattenedInputWrapper`-wrapped). Requires
-    `model.eval()` already active -- raises `ValueError` otherwise.
-    `example`: one of `most_and_least_sensitive_examples`'s returned dicts (needs flat `(784,)`
-    `x`/`x_adv` pixel tensors).
-
-    Returns {"feature_distance", "L_head_exact", "head_bound", "actual_logit_distance",
-    "head_bound_tightness"} -- identical keys to `head_layer_bound_check`'s return value.
-    """
+    """Compares the final linear layer's exact Lipschitz bound against its actual behaviour for one 
+    attacked example. 
+    Returns {"feature_distance", "L_head_exact", "head_bound", "actual_logit_distance", "head_bound_tightness"}."""
     _require_eval_mode(model, "strong_cnn_head_layer_bound_check")
     with torch.no_grad():
         x_image = example["x"].reshape(1, 1, 28, 28)
@@ -239,16 +144,8 @@ def strong_cnn_bound_comparison(model, x_query, y_query, x_pool, y_pool, x_train
                                  distance_fn, epsilons=DEFAULT_EPSILONS, pgd_alpha_frac=0.25,
                                  pgd_num_steps=20, pgd_num_restarts=5, n_points=500,
                                  normalize_features=True, max_pairs=None, seed=0, verbose=True):
-    """StrongCNN analogue of `run_experiment.run_bound_comparison_with_distance_fn`: computes
-    `L_full_estimated`/`product_bound` via `compute_strong_cnn_bounds`, then runs the FGSM/PGD
-    epsilon sweep (`run_epsilon_sweep`, imported UNCHANGED -- fully architecture-agnostic) with
-    `R_adv` measured under the SAME `distance_fn`.
-
-    `model`: raw, trained `StrongCNN`. Requires `model.eval()` already active -- raises
-    `ValueError` otherwise.
-
-    Returns (summary_df, sweep_results), same shape as `run_bound_comparison_with_distance_fn`'s.
-    """
+    """Computes L_full_estimated and product_bound, then runs the FGSM/PGD epsilon sweep with R_adv 
+    measured under the same distance function. Returns (summary_df, sweep_results)."""
     _require_eval_mode(model, "strong_cnn_bound_comparison")
     bound_result = compute_strong_cnn_bounds(
         model, x_query, y_query, distance_fn, x_train_for_norm,
@@ -267,35 +164,9 @@ def strong_cnn_bound_comparison(model, x_query, y_query, x_pool, y_pool, x_train
 
 
 def main(distance_fn=None, seed=0, verbose=True):
-    """Single-checkpoint StrongCNN baseline: trains via `STRONG_CNN_CONFIG`'s exact recipe
-    (mirrors `mnist_example.run_experiment.run_stronger_cnn_raw_mnist_experiment`'s wiring --
-    full 60k MNIST, `augment_fn` built from `augmentation.random_affine_augment`,
-    `lr_scheduler_fn` built from `torch.optim.lr_scheduler.CosineAnnealingLR`), then runs the full
-    epsilon sweep and tight/loose bound comparison against it -- mirrors `run_experiment.main()`/
-    `main_with_distance_fn()`'s two-call pattern (call once per metric).
-
-    `distance_fn` defaults to plain Euclidean (`estimators.euclidean_distance_fn`) if left `None`.
-    Pass a Mahalanobis `distance_fn` (via `run_experiment.build_pixel_mahalanobis_distance_fn`)
-    for the Mahalanobis baseline.
-
-    Calls `model.eval()` explicitly right after training -- defensively, not relying on
-    `train_classifier`'s internal `evaluate_accuracy` call happening to leave the model in eval
-    mode (see this module's docstring for why this matters for `StrongCNN` specifically).
-
-    At `seed=0` (the default), loads the same shared checkpoint every other single-run driver in
-    this project uses (`models.train_or_load_strong_cnn`, `mnist_example/checkpoints/`) rather than
-    an independently-trained copy of its own -- so this baseline is comparing weight-for-weight the
-    SAME `StrongCNN` as `run_experiment.run_stronger_cnn_raw_mnist_experiment` and (eventually)
-    `signature_distance`, not just the same architecture retrained separately. A non-zero `seed`
-    trains fresh instead, since the shared checkpoint is only defined for the canonical `seed=0`
-    recipe (matches `adversarial_strong_cnn_seed_sweep.py`'s own independent-retraining pattern for
-    its non-zero seeds).
-
-    Returns (summary_df, sweep_results, model) -- `model` (the raw, trained, eval-mode
-    `StrongCNN`) is returned in addition to `run_experiment.main()`'s own
-    `(summary_df, sweep_results)` shape, so a second call with a different `distance_fn` can
-    reuse the SAME trained weights instead of retraining (see notebook usage).
-    """
+    """Single-checkpoint StrongCNN baseline: trains (or loads the shared seed=0 checkpoint), then 
+    runs the full epsilon sweep and bound comparison. distance_fn defaults to Euclidean. 
+    Returns (summary_df, sweep_results, model)."""
     if distance_fn is None:
         distance_fn = euclidean_distance_fn
 
@@ -327,7 +198,7 @@ def main(distance_fn=None, seed=0, verbose=True):
         if verbose:
             print(f"train_acc={train_acc:.4f}  test_acc={test_acc:.4f}")
 
-    model.eval()  # defensive -- see module docstring
+    model.eval()
 
     generator = torch.Generator().manual_seed(seed)
     query_idx = torch.randperm(len(test), generator=generator)[:1000]

@@ -1,35 +1,19 @@
-"""The three classifiers under study, their training loop, and the margin
-function the Lipschitz estimators are actually applied to.
-"""
+"""The three classifiers under study, their training loop, and the margin function the Lipschitz
+estimators are applied to."""
 
 from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from mnist_example.augmentation import random_affine_augment
 from mnist_example.data import load_mnist, make_loader
-
 torch.set_default_dtype(torch.float64)
-
 CHECKPOINT_DIR = Path(__file__).resolve().parent / "checkpoints"
-
-# float64 is required throughout this project (see toy_example's convention
-# of avoiding float32 noise in true-vs-estimate comparisons), and PyTorch's
-# MPS backend does not support float64 -- so despite Apple-Silicon MPS being
-# available, this always resolves to CPU on this machine. CUDA (when present,
-# e.g. on Colab) does support float64 and will be used automatically.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class LogisticRegressionModel(nn.Module):
-    """Single linear layer, 784 -> 10. Margin is exactly linear in x, which
-    makes this the one model with a closed-form Lipschitz constant
-    (||w_true - w_runner_up||_2 for a fixed class pair) -- see
-    estimators.py's checkpoint test.
-    """
-
+    """Single linear layer, 784 -> 10."""
     def __init__(self, input_dim=784, num_classes=10):
         super().__init__()
         self.linear = nn.Linear(input_dim, num_classes)
@@ -39,16 +23,7 @@ class LogisticRegressionModel(nn.Module):
 
 
 class SmallMLP(nn.Module):
-    """One or two hidden layers, ReLU by default.
-
-    Activation choice: toy_example used tanh throughout for continuity
-    with its smooth closed-form ground truth. There is no such ground truth
-    here, and ReLU is the standard choice for MNIST classifiers (faster to
-    train, no vanishing-gradient concern at this depth) -- so ReLU is the
-    default, with tanh still available via `activation` for anyone who wants
-    to compare. See README's Design decisions section.
-    """
-
+    """One or two hidden layers, ReLU by default (tanh also available)."""
     def __init__(self, input_dim=784, hidden_sizes=(128,), num_classes=10, activation="relu"):
         super().__init__()
         act_cls = {"relu": nn.ReLU, "tanh": nn.Tanh}[activation]
@@ -65,21 +40,8 @@ class SmallMLP(nn.Module):
 
 
 class SmallCNN(nn.Module):
-    """Two conv+pool blocks, then a small FC head. Deliberately small/fast --
-    this is a diagnostics project, not an accuracy benchmark.
-
-    Split into two explicitly separate, independently callable submodules --
-    `extractor` (everything up to and including the flatten) and `head` (the
-    final linear layer, raw logits) -- so the layer-decomposition
-    sub-experiment (layer_decomposition.py) can evaluate each in isolation
-    (`model.extractor(x)`, `model.head(features)`) without forward hooks.
-    `forward(x)` is unchanged in behavior: `model(x) == model.head(model.extractor(x))`
-    exactly (see tests/test_layer_decomposition.py), and every constructor
-    argument and the trained-accuracy behavior are unaffected by this split
-    -- it's a pure module-structure refactor, channel sizes/kernel/pooling
-    are identical to before.
-    """
-
+    """Two conv+pool blocks, then a small linear head. Split into extractor (everything up to the
+    flatten) and head (the final linear layer), so each can be evaluated in isolation."""
     def __init__(self, num_classes=10, conv_channels=(16, 32)):
         super().__init__()
         c1, c2 = conv_channels
@@ -99,31 +61,8 @@ class SmallCNN(nn.Module):
 
 
 class StrongCNN(nn.Module):
-    """Higher-capacity CNN aimed at near-state-of-the-art MNIST accuracy
-    (target ~99.3%+ test accuracy), built as a stronger baseline ahead of
-    the data-cleaning experiment -- NOT a replacement for `SmallCNN`, which
-    stays exactly as-is as the original, deliberately modest baseline (see
-    distance_measures.md's three-model capacity comparison).
-
-    Fixed architecture (paired with `STRONG_CNN_CONFIG` below for the
-    exact training recipe) -- recorded here, not just in a notebook cell,
-    because the later data-cleaning experiment reuses this exact
-    architecture unchanged and needs something durable to point to:
-
-      Conv2d(1->32, 3x3, pad=1) -> BatchNorm2d(32) -> ReLU
-      Conv2d(32->32, 3x3, pad=1) -> BatchNorm2d(32) -> ReLU
-      MaxPool2d(2) -> Dropout2d(p=dropout_conv)                      # (32,14,14)
-      Conv2d(32->64, 3x3, pad=1) -> BatchNorm2d(64) -> ReLU
-      Conv2d(64->64, 3x3, pad=1) -> BatchNorm2d(64) -> ReLU
-      MaxPool2d(2) -> Dropout2d(p=dropout_conv)                      # (64,7,7)
-      Flatten -> Linear(64*7*7 -> 256) -> BatchNorm1d(256) -> ReLU -> Dropout(p=dropout_fc)
-      Linear(256 -> num_classes)
-
-    No extractor/head split (unlike `SmallCNN`) -- that split exists
-    specifically to support `layer_decomposition.py`'s sub-experiment,
-    which this model isn't part of.
-    """
-
+    """Higher-capacity CNN: four conv layers with batch norm and dropout, then a two-layer classifier
+    head with batch norm and dropout, targeting near-state-of-the-art MNIST accuracy."""
     def __init__(self, num_classes=10, dropout_conv=0.25, dropout_fc=0.5):
         super().__init__()
         self.features = nn.Sequential(
@@ -143,25 +82,16 @@ class StrongCNN(nn.Module):
     def forward(self, x):
         return self.classifier(self.features(x))
 
-
-# Exact training recipe for StrongCNN's raw-MNIST baseline -- kept as one
-# importable, durable config (not a notebook cell) so the later
-# data-cleaning experiment can reuse it byte-for-byte. Consumed by
-# run_experiment.py::run_stronger_cnn_raw_mnist_experiment, which builds
-# an augmentation.random_affine_augment closure from the augment_* keys and
-# a torch.optim.lr_scheduler.CosineAnnealingLR from the lr_scheduler_* keys,
-# and passes both to train_classifier below via its augment_fn/
-# lr_scheduler_fn parameters.
 STRONG_CNN_CONFIG = {
     "epochs": 25,
     "lr": 1e-3,
     "batch_size": 256,
     "optimizer": "adam",
     "lr_scheduler": "cosine_annealing",
-    "lr_scheduler_t_max": 25,        # == epochs: one full cosine cycle over the whole run
+    "lr_scheduler_t_max": 25,
     "lr_scheduler_eta_min": 1e-5,
-    "augment_degrees": 10.0,          # max +/- rotation, degrees
-    "augment_translate": 0.1,         # max +/- shift, fraction of image size
+    "augment_degrees": 10.0, 
+    "augment_translate": 0.1,
     "dropout_conv": 0.25,
     "dropout_fc": 0.5,
     "conv_channels": (32, 32, 64, 64),
@@ -170,17 +100,7 @@ STRONG_CNN_CONFIG = {
 
 
 class FlattenedInputWrapper(nn.Module):
-    """Wraps a model that expects (N, 1, 28, 28) image input (i.e. SmallCNN)
-    so it instead accepts (N, 784) flat input, reshaping internally.
-
-    estimators.py samples perturbation directions and computes distances in
-    flat 784-d pixel space uniformly across all three models -- this lets
-    the CNN be handed to those same estimator functions unchanged (same
-    contract as the logistic regression / MLP models, which are already
-    flat), rather than special-casing image-shaped input inside the
-    estimators themselves.
-    """
-
+    """Wraps a model that expects (N, 1, 28, 28) image input so it instead accepts (N, 784) flat input."""
     def __init__(self, model):
         super().__init__()
         self.model = model
@@ -191,21 +111,9 @@ class FlattenedInputWrapper(nn.Module):
 
 def train_classifier(model, train_loader, test_loader, epochs, lr, device=DEVICE, verbose=True,
                       augment_fn=None, lr_scheduler_fn=None):
-    """Plain cross-entropy + Adam training loop. Returns (model, train_acc, test_acc).
-
-    `augment_fn` (optional): called as `augment_fn(x)` on each training
-    batch's input before the forward pass -- e.g.
-    `augmentation.random_affine_augment` -- applied only during training,
-    never at eval time. Left `None` (the default), this is exactly the
-    original unaugmented loop: every pre-existing caller (logistic
-    regression, MLP, the original `SmallCNN`) is unaffected.
-
-    `lr_scheduler_fn` (optional): called once as `lr_scheduler_fn(optimizer)`
-    to build a scheduler object (e.g. a `torch.optim.lr_scheduler`
-    instance), whose `.step()` is called once per epoch, after that
-    epoch's batches (not per batch). Left `None` (the default), lr stays
-    fixed at `lr` throughout, exactly as before.
-    """
+    """Cross-entropy + Adam training loop. augment_fn, if given, is applied to each training batch's input. 
+    lr_scheduler_fn, if given, builds a scheduler stepped once per epoch. 
+    Returns (model, train_acc, test_acc)."""
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -250,14 +158,8 @@ def evaluate_accuracy(model, loader, device=DEVICE):
 
 
 def margin_fn(model, x, y_true):
-    """logit[y_true] - max(logit[j] for j != y_true), per example.
-
-    This is the natural classifier analogue of a scalar regression output:
-    a single real number per input, and it's what robustness actually
-    depends on (margin crossing zero = the predicted class flips). The
-    Lipschitz estimators in estimators.py are applied to this function, not
-    to raw logits.
-    """
+    """logit[y_true] - max(logit[j] for j != y_true), per example. The function the Lipschitz 
+    estimators are applied to."""
     logits = model(x)
     true_logit = logits.gather(1, y_true.unsqueeze(1)).squeeze(1)
     masked = logits.clone()
@@ -267,17 +169,9 @@ def margin_fn(model, x, y_true):
 
 
 def train_or_load_small_cnn(seed=0, checkpoint_dir=CHECKPOINT_DIR, verbose=True):
-    """The canonical SmallCNN: one fixed recipe (8 epochs, lr=1e-3, batch
-    size 256, seed=0, the standard 60k/10k MNIST split), shared by every
-    experiment in this project that wants THE SAME trained SmallCNN rather
-    than an independently-retrained copy -- including, eventually,
-    signature_distance (see checkpoints/README or distance_measures.md).
-
-    Cache-aside: loads `checkpoint_dir/small_cnn_state_dict.pt` if it
-    exists, otherwise trains fresh and saves it there. Pass
-    `checkpoint_dir=None` to force a fresh, uncached training run (e.g. for
-    a test that must prove determinism isn't just a cached artifact).
-    """
+    """Loads a cached SmallCNN if one exists at checkpoint_dir, otherwise trains one with the
+    project's standard recipe and saves it. checkpoint_dir=None forces a fresh, uncached run. 
+    Returns (model, train_acc, test_acc)."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
     train_loader = make_loader(train.x_image, train.y, batch_size=256, shuffle=True, seed=seed)
@@ -293,7 +187,7 @@ def train_or_load_small_cnn(seed=0, checkpoint_dir=CHECKPOINT_DIR, verbose=True)
             print(f"[checkpoint] loaded SmallCNN from {checkpoint_path} "
                   f"(train_acc={train_acc:.4f}  test_acc={test_acc:.4f})")
     else:
-        torch.manual_seed(seed)  # controls init; must precede construction
+        torch.manual_seed(seed)
         model = SmallCNN()
         model, train_acc, test_acc = train_classifier(
             model, train_loader, test_loader, epochs=8, lr=1e-3, verbose=verbose)
@@ -307,18 +201,10 @@ def train_or_load_small_cnn(seed=0, checkpoint_dir=CHECKPOINT_DIR, verbose=True)
 
 
 def train_or_load_strong_cnn(seed=0, checkpoint_dir=CHECKPOINT_DIR, verbose=True):
-    """The canonical StrongCNN: `STRONG_CNN_CONFIG`'s exact recipe (25
-    epochs, batch norm, dropout, rotation/translation augmentation,
-    cosine-annealed learning rate, seed=0, the standard 60k/10k MNIST
-    split), shared the same way `train_or_load_small_cnn` is. This is the
-    higher-value model to share a checkpoint for: StrongCNN's BatchNorm/
-    Dropout layers make independent training runs NOT bit-reproducible
-    even at a fixed seed (CPU multi-threaded float non-associativity), so
-    a shared checkpoint is the only way two experiments see literally the
-    same StrongCNN, not just the same architecture.
-
-    Cache-aside, same convention as `train_or_load_small_cnn`.
-    """
+    """Loads a cached StrongCNN if one exists at checkpoint_dir, otherwise trains one with
+    STRONG_CNN_CONFIG's recipe and saves it. A shared checkpoint matters more here than for SmallCNN,
+    since StrongCNN's batch norm and dropout make independent training runs not bit-reproducible even at a fixed seed. 
+    Returns (model, train_acc, test_acc)."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
     train_loader = make_loader(train.x_image, train.y, batch_size=STRONG_CNN_CONFIG["batch_size"],
@@ -355,5 +241,5 @@ def train_or_load_strong_cnn(seed=0, checkpoint_dir=CHECKPOINT_DIR, verbose=True
             torch.save({"model_state_dict": model.state_dict(), "train_acc": train_acc, "test_acc": test_acc},
                        checkpoint_path)
 
-    model.eval()  # defensive -- BatchNorm/Dropout must not be in training mode for evaluation
+    model.eval()
     return model, train_acc, test_acc

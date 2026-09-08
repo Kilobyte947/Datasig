@@ -1,12 +1,4 @@
-"""Plotting for the adversarial-perturbation vs. Lipschitz-bound comparison.
-
-Reuses `mnist_example.plots._maybe_save` (save-or-not-and-return-the-figure convention) rather
-than duplicating it, and follows that module's palette/style: `blue`/`orange` for the two
-things being compared (here, FGSM vs. PGD, mirroring its Euclidean-vs-Mahalanobis convention), and
-a dashed reference line at the theoretical value a quantity is bounded by/against (mirroring
-`plot_epsilon_sweep`'s `selected_epsilon` line and `plot_layer_decomposition_sweep`'s
-`looseness_ratio=1` floor).
-"""
+"""Plotting for the adversarial-perturbation vs. Lipschitz-bound comparison."""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,22 +10,10 @@ METHOD_COLORS = {"FGSM": "blue", "PGD": "orange"}
 
 def plot_R_adv_distribution(sweep_results, L_full_estimated, product_bound,
                              metric_name="Euclidean", save_path=None):
-    """Per-epsilon distribution of the achieved sensitivity ratio R_adv, FGSM vs. PGD side by
-    side (box plots, one pair of boxes per epsilon), against the two Lipschitz bounds
-    `run_bound_comparison`/`run_bound_comparison_with_distance_fn` computed for this same
-    checkpoint: `L_full_estimated` (tight) and `product_bound` (loose), each a horizontal
-    reference line -- the same "measured distribution vs. a theoretical reference value" layout
-    used throughout this project's other plots.
+    """Plot the distribution of R_adv across the epsilon sweep, one boxplot per epsilon, one boxplot
+    per method (FGSM/PGD) per epsilon, with a horizontal line for the tight bound (L_full_estimated)
+    and a horizontal line for the loose bound (product_bound)."""
 
-    `sweep_results`: `run_experiment.run_epsilon_sweep`'s return value (specifically its
-    `"per_case"` dict, keyed by `(epsilon, method) -> {"R_adv": Tensor, ...}`).
-
-    `metric_name` (default `"Euclidean"`, matching `mnist_example.plots.plot_ratio_distribution`'s
-    own parameter of the same name) only affects the title/axis wording -- pass `"Mahalanobis"`
-    when `sweep_results` was computed with a Mahalanobis `distance_fn` (see
-    `run_experiment.build_pixel_mahalanobis_distance_fn`), so the plot doesn't mislabel the
-    distance actually used in the denominator.
-    """
     per_case = sweep_results["per_case"]
     epsilons = sorted({eps for eps, _method in per_case.keys()})
     positions = list(range(len(epsilons)))
@@ -69,16 +49,10 @@ def plot_R_adv_distribution(sweep_results, L_full_estimated, product_bound,
 
 def plot_R_adv_histogram_by_outcome(sweep_results, epsilon, method="FGSM", metric_name="Euclidean",
                                      bins=30, save_path=None):
-    """Histogram of the achieved sensitivity ratio R_adv for ONE (epsilon, method) case, split by
-    attack outcome: green for examples that stayed correctly classified under the attack, red for
-    examples the attack flipped -- complements `plot_R_adv_distribution`'s aggregate box plot by
-    showing whether misclassified examples are concentrated at higher R_adv.
-
-    `sweep_results`: `run_experiment.run_epsilon_sweep`'s return value (needs its `"per_case"`
-    dict's `(epsilon, method) -> {"R_adv", "is_misclassified"}` entries).
-    `epsilon`/`method`: select which `per_case` entry to plot (`method` one of `"FGSM"`/`"PGD"`).
-    `metric_name`: only affects axis/title wording, same convention as `plot_R_adv_distribution`.
-    """
+    """Plot the distribution of R_adv for one (epsilon, method) pair, split by whether the attack
+    succeeded in misclassifying the image or not (red = misclassified, green = not misclassified),
+    with a single histogram binning across both outcomes (so the two histograms are stacked, not
+    overlapping)."""
     case = sweep_results["per_case"][(epsilon, method)]
     R_adv = case["R_adv"].detach().cpu().numpy()
     is_misclassified = case["is_misclassified"].detach().cpu().numpy()
@@ -101,23 +75,8 @@ def plot_R_adv_histogram_by_outcome(sweep_results, epsilon, method="FGSM", metri
 
 
 def plot_bound_closeness_vs_width(combined_df, metric_name="Euclidean", save_path=None):
-    """Two-panel summary across the CNN-width sweep (mirrors
-    `mnist_example.plots.plot_layer_decomposition_sweep`'s two-panel layout for the same width
-    axis): left panel is `max_R_adv / L_full_estimated` (the tight bound) vs. width, with a
-    reference line at 1.0 -- the theoretical ceiling any achieved ratio must stay at or below,
-    by definition (`summarize_epsilon_sweep`'s Requirement-5 sanity check enforces this
-    directly). Right panel is the same normalized quantity against `product_bound` (the loose,
-    submultiplicative bound), which has no such 1.0 ceiling in general -- shown for comparison,
-    without a reference line, since the loose bound is not itself guaranteed to be approached
-    the same way.
-
-    `combined_df`: `run_experiment.run_cnn_adversarial_width_sweep`'s (or
-    `run_cnn_adversarial_width_sweep_with_distance_fn`'s) combined (one-row-per-width) DataFrame
-    -- needs `width`, `ratio_to_L_full_fgsm`/`_pgd`, and `ratio_to_product_bound_fgsm`/`_pgd`
-    columns.
-
-    `metric_name` (default `"Euclidean"`) only affects the suptitle wording -- pass
-    `"Mahalanobis"` when `combined_df` came from a Mahalanobis-`distance_fn` width sweep.
+    """Plot the closeness of the achieved adversarial sensitivity (max_R_adv) to the tight bound
+    (L_full_estimated) and the loose bound (product_bound) vs. CNN width, one panel per bound.
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
@@ -149,36 +108,9 @@ def plot_bound_closeness_vs_width(combined_df, metric_name="Euclidean", save_pat
 
 def plot_extreme_examples(most_sensitive, least_sensitive, width=None, metric_name="Euclidean",
                            save_path=None):
-    """Visualizes the two examples from `run_experiment.most_and_least_sensitive_examples`: the
-    single attacked point that achieved the LARGEST R_adv (top row) and the single one that
-    achieved the SMALLEST R_adv (bottom row) for one checkpoint. Each row shows the clean image,
-    the adversarial image, and their pixel-space absolute difference, labeled with the true
-    class, the model's prediction on each, and the epsilon/method/R_adv that produced it.
-
-    The left column gets an x-axis label with `pixel_distance` (`distance_fn(x, x_adv)` --
-    `||x - x_adv||_2` if Euclidean, whatever `distance_fn` was passed to
-    `most_and_least_sensitive_examples` otherwise -- the INITIAL distance in raw pixel space,
-    before either image reaches the extractor) if present on the example dict. If
-    `head_layer_bound_check`'s keys (`feature_distance`, `L_head_exact`, `head_bound`,
-    `actual_logit_distance`, `head_bound_tightness`) are also present (merged in by
-    `run_cnn_adversarial_width_sweep`/`run_cnn_adversarial_width_sweep_with_distance_fn`), the
-    middle column gets an x-axis label comparing the Euclidean distance between the two
-    extracted-feature vectors (right after the pixel-space distance shown on the left, right
-    before the head -- ALWAYS Euclidean regardless of `metric_name`, see
-    `run_experiment.compute_bounds_with_distance_fn`'s docstring for why) against the head
-    layer's own exact Lipschitz bound on how far that distance can push the logits -- together
-    the two labels trace the full pixel -> feature -> logit distance chain for this one example.
-    Both are omitted gracefully (no crash) if a caller passes examples without that extra info.
-
-    `most_sensitive`/`least_sensitive`: dicts with at least the keys
-    `most_and_least_sensitive_examples` returns (`x`, `x_adv`, `y_true`, `pred_clean`,
-    `pred_adv`, `epsilon`, `method`, `R_adv`) -- no model call happens here, purely display of
-    already-computed values, matching this module's other plotting functions.
-
-    `metric_name` (default `"Euclidean"`) only affects the title wording -- pass `"Mahalanobis"`
-    when these examples came from a Mahalanobis-`distance_fn` sweep, so the (always-Euclidean)
-    `feature_distance` label in the middle column isn't confused with the (metric-dependent)
-    `pixel_distance` label on the left.
+    """Plot the most and least sensitive examples from `run_experiment.find_examples_by_criteria` 
+    -- the two rows of the figure are the most and least sensitive examples, each with three 
+    columns: clean image, adversarial image, and absolute difference.
     """
     fig, axes = plt.subplots(2, 3, figsize=(9, 7.5))
 
@@ -222,11 +154,8 @@ def plot_extreme_examples(most_sensitive, least_sensitive, width=None, metric_na
 
 
 def plot_example_pair(example, metric_name="Euclidean", save_path=None):
-    """Clean vs. adversarial image for ONE example from `run_experiment.find_examples_by_criteria`
-    (or any dict with its `x`/`x_adv`/`y_true`/`pred_clean`/`pred_adv`/`R_adv`/`epsilon`/`method`/
-    `pixel_distance` keys) -- the single-example building block `plot_extreme_examples` uses per
-    row, generalized to stand alone so callers can display an arbitrary-length list of flagged
-    examples one at a time rather than in one fixed-size (most/least) figure.
+    """Plot a single example pair (clean and adversarial) with titles showing 
+    the true label, predicted labels, R_adv, epsilon, method, and pixel distance.
     """
     x = example["x"].detach().cpu().numpy().reshape(28, 28)
     x_adv = example["x_adv"].detach().cpu().numpy().reshape(28, 28)
@@ -249,18 +178,8 @@ def plot_example_pair(example, metric_name="Euclidean", save_path=None):
 
 def plot_euclidean_vs_mahalanobis_R_adv(euclidean_summary_df, mahalanobis_summary_df,
                                          stat="mean_R_adv", save_path=None):
-    """Grouped-bar comparison of an R_adv summary statistic (default `mean_R_adv`) across the
-    epsilon sweep, Euclidean vs. Mahalanobis distance, one panel per attack method (FGSM/PGD) --
-    mirrors `mnist_example.plots.plot_euclidean_vs_mahalanobis`'s own grouped-bar-per-submethod
-    convention (`blue`=Euclidean, `orange`=Mahalanobis), applied here to this
-    sub-experiment's `(epsilon, method)` summary tables instead of that module's three
-    Lipschitz-estimator sub-methods.
-
-    `euclidean_summary_df`/`mahalanobis_summary_df`: `summarize_epsilon_sweep`'s per-(epsilon,
-    method) tables (from `run_bound_comparison`/`run_bound_comparison_with_distance_fn`
-    respectively) for the SAME checkpoint -- must share the same set of epsilons for the grouped
-    bars to line up meaningfully.
-    `stat`: which summary column to plot (`"mean_R_adv"`, `"median_R_adv"`, or `"max_R_adv"`).
+    """Plot the mean or max R_adv (or any other statistic) vs. epsilon, one panel per method (FGSM/PGD),
+    with two bars per epsilon (Euclidean vs. Mahalanobis). 
     """
     methods = ("FGSM", "PGD")
     fig, axes = plt.subplots(1, len(methods), figsize=(7 * len(methods), 5))
@@ -289,17 +208,9 @@ def plot_euclidean_vs_mahalanobis_R_adv(euclidean_summary_df, mahalanobis_summar
 
 def plot_euclidean_vs_mahalanobis_bounds_vs_width(euclidean_combined_df, mahalanobis_combined_df,
                                                     save_path=None):
-    """Extends `plot_bound_closeness_vs_width`'s two-panel (tight bound / loose bound) layout with
-    a second dimension: solid lines for Euclidean, dashed for Mahalanobis (the same
-    solid/dashed-for-a-second-dimension convention `mnist_example.plots.plot_layer_decomposition_
-    sweep` uses for exact-vs-estimated), so the SAME question `plot_bound_closeness_vs_width` asks
-    per metric ("does the gap between achieved sensitivity and the theoretical bound narrow or
-    widen with capacity?") can be compared directly ACROSS metrics on one pair of axes.
-
-    `euclidean_combined_df`/`mahalanobis_combined_df`: `run_cnn_adversarial_width_sweep`'s and
-    `run_cnn_adversarial_width_sweep_with_distance_fn`'s combined (one-row-per-width) DataFrames
-    respectively, for the SAME widths/checkpoints -- both need `width`, `ratio_to_L_full_fgsm`/
-    `_pgd`, and `ratio_to_product_bound_fgsm`/`_pgd` columns.
+    """Plot the closeness of the achieved adversarial sensitivity (max_R_adv) to the tight bound
+    (L_full_estimated) and the loose bound (product_bound) vs. CNN width, one panel per bound,
+    with two lines per panel (Euclidean vs. Mahalanobis). 
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
@@ -333,32 +244,15 @@ def plot_euclidean_vs_mahalanobis_bounds_vs_width(euclidean_combined_df, mahalan
 
 
 # ---------------------------------------------------------------------------
-# Multi-seed confirmation sweep (seed_sweep.py, Checkpoint 5) -- all four functions below consume
-# seed_sweep.summarize_seed_sweep's/run_seed_sweep's DataFrames, not this module's single-seed
-# sweep_results/summary_df/combined_df, and all accept `metric_name` for title/axis wording,
-# matching every other plotting function in this file.
+# Multi-seed confirmation sweep (seed_sweep.py)
 # ---------------------------------------------------------------------------
 
 WIDTH_COLORS = {16: "blue", 32: "orange", 64: "green"}
 
 
 def plot_misclassification_vs_width_with_spread(per_config_df, metric_name="Euclidean", save_path=None):
-    """THE PRIMARY FIGURE for the multi-seed sweep: whether the single-seed width-32/width-64
-    misclassification-rate inversion (see seed_sweep.py's top docstring) survives reseeding is
-    read directly off this plot -- misclassification rate vs. width, one line per epsilon, error
-    bars = std across seeds (`seed_sweep.summarize_seed_sweep`'s `per_config` table).
-
-    One panel per attack method (FGSM/PGD, mirroring `plot_euclidean_vs_mahalanobis_R_adv`'s own
-    one-panel-per-method convention), one color line per epsilon within each panel (a
-    `viridis`-sampled color per epsilon, since epsilon is a continuous sweep axis, unlike the
-    fixed two-way FGSM/PGD or Euclidean/Mahalanobis choices `METHOD_COLORS` covers elsewhere in
-    this file).
-
-    `per_config_df`: `seed_sweep.summarize_seed_sweep(...)["per_config"]`, needs `width`,
-    `epsilon`, `method`, `metric`, `misclassification_rate_mean`, `misclassification_rate_std`
-    columns -- filtered here to `metric_name` (only one metric plotted per call, matching every
-    other single-metric plot in this file; call twice for Euclidean and Mahalanobis and compare
-    side by side, same convention as `plot_R_adv_distribution`).
+    """ Plot the mean misclassification rate vs. width, one panel per method (FGSM/PGD), with error bars
+    showing the standard deviation across seeds. Each epsilon is a separate line within each panel. 
     """
     sub = per_config_df[per_config_df["metric"] == metric_name]
     methods = [m for m in ("FGSM", "PGD") if m in sub["method"].unique()]
@@ -388,16 +282,8 @@ def plot_misclassification_vs_width_with_spread(per_config_df, metric_name="Eucl
 
 
 def plot_L_full_vs_misclassification(df, metric_name="Euclidean", save_path=None):
-    """Scatter of `L_full_estimated` against `misclassification_rate`, points colored by width,
-    every `(seed, epsilon, method)` row shown individually (not aggregated) -- if the two
-    quantities are decoupled (a wider network having a larger `L_full_estimated` doesn't imply a
-    higher achieved misclassification rate, or vice versa), this shows it directly as a lack of
-    any visible trend within/across the width color groups, rather than requiring a separate
-    correlation coefficient.
-
-    `df`: `seed_sweep.run_seed_sweep`'s raw long-format frame (or any subset of it with the same
-    columns) -- needs `width`, `metric`, `L_full_estimated`, `misclassification_rate`. Filtered
-    here to `metric_name`.
+    """ Scatter of the achieved misclassification rate vs. the full-logit-vector Lipschitz constant
+    (L_full_estimated), one point per (seed, width), colored by width.
     """
     sub = df[df["metric"] == metric_name]
     fig, ax = plt.subplots(figsize=(7, 5.5))
@@ -417,20 +303,9 @@ def plot_L_full_vs_misclassification(df, metric_name="Euclidean", save_path=None
 
 
 def plot_margin_vs_full_lipschitz(df, metric_name="Euclidean", save_path=None):
-    """Scatter of `L_margin_estimated` (the SCALAR margin functional's own Lipschitz constant,
-    `run_experiment.margin_lipschitz_estimate` -- this project's main robustness measure
-    everywhere outside `layer_decomposition.py`) against `L_full_estimated` (the full-logit-vector
-    Lipschitz constant this sub-experiment's bounds are built from), one point per `(seed, width)`,
-    colored by width -- tests whether the margin functional tracks the observed vulnerability
-    (`plot_L_full_vs_misclassification`) any better than the full-logit quantity does. The two are
-    DIFFERENT functions' Lipschitz constants (see `margin_lipschitz_estimate`'s docstring) and are
-    never averaged together here, only plotted against each other.
-
-    `df`: `seed_sweep.run_seed_sweep`'s raw frame -- needs `seed`, `width`, `metric`,
-    `L_margin_estimated`, `L_full_estimated`. De-duplicated to one row per `(seed, width)` first
-    (both quantities are checkpoint-level, i.e. constant across a checkpoint's `(epsilon, method)`
-    rows -- see `run_single_seed_width`'s docstring -- so plotting every row would only overplot
-    identical points on top of each other, not add information).
+    """ Scatter of the margin-functional Lipschitz constant (L_margin_estimated) vs. the
+    full-logit-vector Lipschitz constant (L_full_estimated), one point per (seed, width),
+    colored by width. The diagonal line is the equality line (L_margin = L_full).
     """
     sub = df[df["metric"] == metric_name].drop_duplicates(subset=["seed", "width"])
     fig, ax = plt.subplots(figsize=(6.5, 6))
@@ -458,16 +333,9 @@ def plot_margin_vs_full_lipschitz(df, metric_name="Euclidean", save_path=None):
 
 def plot_bound_closeness_vs_width_with_spread(per_config_df, epsilon=None, metric_name="Euclidean",
                                                 save_path=None):
-    """Error-bar version of `plot_bound_closeness_vs_width`: same two-panel (tight bound / loose
-    bound) layout and `ratio=1` reference line, but width vs. mean +/- std across seeds (from
-    `seed_sweep.summarize_seed_sweep`'s `per_config` table) instead of a single-seed point per
-    width.
-
-    `per_config_df`: needs `width`, `epsilon`, `method`, `metric`, `ratio_to_L_full_mean`,
-    `ratio_to_L_full_std`, `ratio_to_product_bound_mean`, `ratio_to_product_bound_std`.
-    `epsilon`: which epsilon's rows to plot (defaults to the LARGEST epsilon present, matching
-    `run_cnn_adversarial_width_sweep`'s own "evaluated at the largest swept epsilon" convention --
-    see that function's docstring for why).
+    """ Plot the closeness of the achieved adversarial sensitivity (max_R_adv) to the tight bound
+    (L_full_estimated) and the loose bound (product_bound) vs. CNN width (one panel per bound), 
+    with error bars showing the standard deviation across seeds.
     """
     sub = per_config_df[per_config_df["metric"] == metric_name]
     if epsilon is None:
@@ -504,23 +372,15 @@ def plot_bound_closeness_vs_width_with_spread(per_config_df, epsilon=None, metri
 
 
 # ---------------------------------------------------------------------------
-# StrongCNN multi-seed sweep (strong_cnn_seed_sweep.py) -- FIXED architecture, five training
-# seeds, common evaluation pool (see that module's top docstring for Goals A/B). Consumes
-# strong_cnn_seed_sweep's tidy R_adv table / stats tables directly, not this file's other
-# sweep_results/summary_df/combined_df shapes.
+# StrongCNN multi-seed sweep (strong_cnn_seed_sweep.py)
 # ---------------------------------------------------------------------------
 
 SEED_COLORS = {0: "blue", 1: "orange", 2: "green", 3: "red", 4: "purple"}
 
 
 def plot_strong_cnn_seed_sweep_r_adv_outcome_grid(df, save_path=None):
-    """Grid of R_adv-by-outcome histograms, one panel per (seed, epsilon x metric) -- rows are
-    seeds, columns are the four (epsilon, metric) combinations, mirroring
-    `plot_R_adv_histogram_by_outcome`'s green/red (not-misclassified/misclassified) stacked-hist
-    convention per panel, but laid out as ONE grid (plan Checkpoint 6, point 1) instead of 20
-    separate figures.
-
-    `df`: `strong_cnn_seed_sweep.build_r_adv_table`'s tidy per-example table.
+    """ Plot the distribution of R_adv for each (seed, epsilon, metric) combination, split by whether
+    the attack succeeded in misclassifying the image or not (red = misclassified, green = not misclassified)
     """
     seeds = sorted(df["seed"].unique())
     epsilons = sorted(df["epsilon"].unique())
@@ -553,12 +413,8 @@ def plot_strong_cnn_seed_sweep_r_adv_outcome_grid(df, save_path=None):
 
 
 def plot_strong_cnn_seed_sweep_cross_seed_overlay(df, save_path=None):
-    """THE PRIMARY FIGURE for Goal B: unconditional R_adv distributions for all five seeds
-    overlaid on one axis, one panel per (epsilon, metric) -- since every seed is evaluated on the
-    IDENTICAL common pool (`strong_cnn_seed_sweep.build_common_pool`), any visible separation
-    between the five curves is genuine seed-to-seed variation, not a pool-composition artifact.
-    Uses `is_misclassified`-unconditional R_adv (the full column), matching plan section 7.1's
-    "only genuinely apples-to-apples cross-seed statistic."
+    """ Plot the distribution of R_adv for each (epsilon, metric) combination, overlaid across seeds
+    (one line per seed, colored by seed), to show the variability of R_adv across seeds for the same epsilon and metric.
     """
     epsilons = sorted(df["epsilon"].unique())
     metrics = (("R_adv_euclidean", "Euclidean"), ("R_adv_mahalanobis", "Mahalanobis"))
@@ -589,16 +445,9 @@ def plot_strong_cnn_seed_sweep_cross_seed_overlay(df, save_path=None):
 
 def plot_strong_cnn_seed_sweep_euclidean_vs_mahalanobis(primary_stats_df, bounds_df, stat="p99",
                                                           save_path=None):
-    """THE PRIMARY FIGURE for Goal A: per-seed `stat` (default p99, this sweep's headline
-    statistic -- see plan section 7.1) grouped bars, Euclidean vs. Mahalanobis, one panel per
-    epsilon, with each seed's OWN `L_full_estimated` (from `per_seed_bounds`, NOT a single shared
-    reference line -- the bound is seed-dependent) overlaid as a marker at that seed's bar
-    position, per metric.
-
-    `primary_stats_df`: concatenation of `strong_cnn_seed_sweep.primary_r_adv_stats`'s Euclidean
-    and Mahalanobis outputs (columns seed, epsilon, median, p95, p99, max, metric).
-    `bounds_df`: `strong_cnn_seed_sweep.per_seed_bounds`'s output (columns seed, metric,
-    L_full_estimated, ...).
+    """ Plot the mean or max R_adv (or any other statistic) vs. epsilon, one panel per epsilon, 
+    with two bars per seed (Euclidean vs. Mahalanobis), and a horizontal line for the tight 
+    bound (L_full_estimated) for each seed and metric.
     """
     epsilons = sorted(primary_stats_df["epsilon"].unique())
     seeds = sorted(primary_stats_df["seed"].unique())
@@ -634,10 +483,7 @@ def plot_strong_cnn_seed_sweep_euclidean_vs_mahalanobis(primary_stats_df, bounds
 
 
 def plot_strong_cnn_seed_sweep_summary_table(summary_df, save_path=None):
-    """Renders `strong_cnn_seed_sweep.build_project1_summary_table`'s one-row-per-seed DataFrame
-    as a plain matplotlib table figure -- the Project-1 punchline figure (plan Checkpoint 6, point
-    5): clean accuracy, adversarial accuracy, and a high quantile of the local Lipschitz estimate,
-    across models with matched clean accuracy.
+    """ Plot a summary table of the key statistics from the StrongCNN seed sweep
     """
     fig, ax = plt.subplots(figsize=(1.6 * len(summary_df.columns), 0.6 * (len(summary_df) + 1)))
     ax.axis("off")
@@ -654,22 +500,12 @@ def plot_strong_cnn_seed_sweep_summary_table(summary_df, save_path=None):
 
 
 # ---------------------------------------------------------------------------
-# Transferability check (strong_cnn_seed_sweep.run_transfer_attack/summarize_transfer_attack) --
-# fixed adversarial examples crafted against ONE seed, evaluated on every seed's own model.
+# Transferability check (strong_cnn_seed_sweep.run_transfer_attack/summarize_transfer_attack)
 # ---------------------------------------------------------------------------
 
 def plot_transfer_attack(summary_df, source_seed, save_path=None):
-    """Two-row grid, one column per epsilon: top row is `transfer_accuracy` vs. `eval_seed` (the
-    fraction of the pool each seed's model still gets right despite the `source_seed`-crafted
-    perturbation -- the `eval_seed == source_seed` bar, outlined in black, is the ordinary,
-    non-transfer adversarial accuracy and is not expected to be higher or lower than the others a
-    priori); bottom row is `p99(R_adv)` vs. `eval_seed`, Euclidean vs. Mahalanobis side by side
-    (each seed's own logits on the fixed image pair).
-
-    `summary_df`: `strong_cnn_seed_sweep.summarize_transfer_attack`'s output -- needs
-    `source_seed`, `eval_seed`, `epsilon`, `transfer_accuracy`, `p99_R_adv_euclidean`,
-    `p99_R_adv_mahalanobis`. Filtered here to `source_seed` (one source at a time, matching this
-    file's other single-condition-per-call plotting convention).
+    """ Plot the transferability of adversarial examples crafted against 
+    one seed's model and evaluated on every seed's own model.
     """
     sub_all = summary_df[summary_df["source_seed"] == source_seed]
     epsilons = sorted(sub_all["epsilon"].unique())

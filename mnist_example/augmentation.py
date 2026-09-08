@@ -1,13 +1,4 @@
-"""Data augmentation for CNN training -- currently just random small
-rotations/translations (no flips: MNIST digits are not flip-invariant, and
-no shear/scale -- the point is a light augmentation, not an aggressive
-one).
-
-Kept as a separate module (mirrors distance.py/embeddings.py's "one
-pluggable transform, one file" convention) so it can be swapped in/out of
-`models.train_classifier` via the `augment_fn` parameter without touching
-training-loop logic.
-"""
+"""Data augmentation for CNN training: random small rotations and translations."""
 
 import torch
 import torch.nn.functional as F
@@ -16,28 +7,10 @@ torch.set_default_dtype(torch.float64)
 
 
 def random_affine_augment(x_image, degrees=10.0, translate=0.1, generator=None):
-    """Applies an independent random small rotation + translation to each
-    image in a batch, via `affine_grid`/`grid_sample` -- fully vectorized
-    over the batch (no per-sample Python loop, no PIL round-trip), and
-    dtype-preserving (works directly on this project's float64 tensors,
-    checked in tests/test_augmentation.py).
-
-    `x_image`: (N, 1, H, W). `degrees`: max absolute rotation, sampled
-    uniformly in [-degrees, +degrees] independently per sample. `translate`:
-    max absolute shift as a fraction of image size (e.g. 0.1 = up to 10% of
-    H/W), sampled uniformly in [-translate, +translate] independently per
-    sample per axis.
-
-    `generator`: optional `torch.Generator` for reproducible sampling
-    (matches this project's seeding convention elsewhere, e.g.
-    `local_perturbation_lipschitz`'s `seed` argument).
-
-    With `degrees=0` and `translate=0` this reduces to the identity map (up
-    to float rounding from the grid-sample interpolation) -- checked
-    directly in tests/test_augmentation.py.
-
-    Returns a tensor of the same shape/dtype/device as `x_image`.
-    """
+    """Applies an independent random rotation and translation to each image in a batch. degrees is 
+    the max absolute rotation in degrees; translate is the max absolute shift as a fraction of image size. 
+    Both sampled uniformly per sample. generator is an optional torch.Generator for reproducible sampling. 
+    Returns a tensor of the same shape as x_image."""
     N, C, H, W = x_image.shape
     dtype, device = x_image.dtype, x_image.device
 

@@ -15,8 +15,6 @@ It's organized as a sequence of experiments, each in its own top-level package:
 - **`mnist_example/`** — Experiment 2. Scales the same three estimators to real classifiers
   (logistic regression, MLP, CNN) trained on MNIST. There is no `L*` here — validity comes from
   (a) agreement between the three sub-methods and (b) stability across resampling.
-- `cnn_mnist.ipynb`, `logistic_regression_mnist.ipynb`, `mlp_mnist.ipynb` — standalone top-level
-  notebooks, precursors to `mnist_example/`.
 
 Each experiment package has its own detailed `README.md` (`toy_example/README.md`,
 `mnist_example/README.md`) — **read the relevant one before making non-trivial changes**; they

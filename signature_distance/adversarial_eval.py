@@ -1,33 +1,12 @@
-"""Adversarial / Lipschitz-ratio evaluation, for every (method, attack,
-analysis-angle) combination this project computes: Method A, Method B, and
-Method C (Hilbert), FGSM and PGD, plus the per-path/border-line follow-up
-analyses built on top of Method B's evaluation. Kept as one file, clearly
-sectioned below, rather than split by method/attack - the underlying
-protocol (load the shared SmallCNN/StrongCNN checkpoint once, perturb once
-per model/epsilon, compute a margin-change numerator over a distance
-denominator, never merge across methods) is identical across every
-section; only the denominator and the sample it's evaluated on differ.
+"""Adversarial and Lipschitz-ratio evaluation for Methods A, B, and C, under FGSM and PGD, plus
+the per-path and border-line follow-up analyses built on Method B's evaluation.
 
-Numerator convention throughout: `margin(model, x, y_true)` (distances.py),
-the same scalar this project's Lipschitz-ratio numerator is always built
-from. Denominators are pixel-Euclidean or a per-method signature distance
-(both distances.py). Attacks are `fgsm_attack`/`pgd_attack`/
-`random_noise_perturbation` (attacks.py) - the random control is a
-magnitude-matched, non-gradient-directed perturbation, used throughout to
-check whether a distance measure separates genuinely *adversarial* shifts
-from equally-large but undirected ones.
-
-Models: every driver in this file loads the shared `mnist_example`
-SmallCNN/StrongCNN checkpoint (`models.train_or_load_small_cnn`/
-`train_or_load_strong_cnn` - no training here), so every number in this
-file is computed on literally the same trained weights, directly
-comparable across sections. (A pre-publication audit found several of
-these drivers previously trained their own fresh, quick 3-epoch pair
-instead - which gave a spurious FGSM > PGD fold-ratio reversal for Method
-B; switched to the canonical checkpoint for exactly that reason. Seed/
-width sweeps that need independently-trained models by design live
-elsewhere - `mnist_example`'s adversarial seed/width sweeps, not in this
-file.)
+Every driver loads the shared canonical SmallCNN/StrongCNN checkpoint rather than training its
+own, so results across sections are computed on identical weights and directly comparable.
+Numerator is always the margin change; denominators are pixel-Euclidean or a per-method signature
+distance. The random control is a magnitude-matched, non-gradient-directed perturbation, used
+throughout to check whether a distance measure separates genuinely adversarial shifts from
+equally-large undirected ones.
 """
 
 import math
@@ -74,24 +53,11 @@ RESULTS_DIR = Path(__file__).parent / "results"
 # Method A
 # ---------------------------------------------------------------------------
 
-
 def run_method_a_adversarial_evaluation(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05),
                                          seed: int = 0, device: str = "cpu", verbose: bool = True) -> dict:
-    """Loads the shared canonical SmallCNN/StrongCNN checkpoint (no training
-    here - see `run_pgd_comparison`'s docstring for why), then for a sample
-    of test images (n_per_class per digit, from data_pool.load_eval_pool)
-    and each epsilon: generate an FGSM adversarial perturbation and a
-    magnitude-matched random control perturbation, compute the margin-change
-    numerator, both denominators (pixel-Euclidean and Method A signature
-    distance), and the resulting ratios. Returns a nested dict, one entry
-    per model.
-
-    Field names use `denom_pixel_*`/`denom_sig_*` and `ratio_pixel_*`/
-    `ratio_sig_*` (not Method B's `denom_a_*`/`denom_b_*` convention, which
-    labels the two distances under test - (a) pixel, (b) Method B - not
-    "Method A"/"Method B"; reusing that here would make "ratio_b" mean
-    "Method A's ratio", exactly the confusion worth avoiding).
-    """
+    """For a sample of test images and each epsilon: generates an FGSM perturbation and a matched
+    random control, computes the margin-change numerator, both denominators (pixel-Euclidean and
+    Method A signature distance), and the resulting ratios. Returns a nested dict, one entry per model."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -164,22 +130,10 @@ def run_method_a_adversarial_evaluation(n_per_class: int = 20, epsilons=(0.02, 0
 # ---------------------------------------------------------------------------
 # Method B
 # ---------------------------------------------------------------------------
-
-
 def run_method_b_adversarial_evaluation(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05),
                                          seed: int = 0, device: str = "cpu", verbose: bool = True) -> dict:
-    """Loads the shared canonical SmallCNN/StrongCNN checkpoint (no training
-    here - see `run_pgd_comparison`'s docstring for why), then for a sample
-    of test images (n_per_class per digit, from data_pool.load_eval_pool)
-    and each epsilon: generate an FGSM adversarial perturbation and a
-    magnitude-matched random control perturbation, compute the margin-change
-    numerator, both denominators (pixel-Euclidean and Method B signature
-    distance), and the resulting ratios. Returns a nested dict, one entry
-    per model.
-
-    Field names: "a" = pixel-Euclidean, "b" = Method B signature distance
-    (`denom_a_*`/`denom_b_*`/`ratio_a_*`/`ratio_b_*`).
-    """
+    """Same as run_method_a_adversarial_evaluation, using Method B's signature distance as the second
+    denominator instead of Method A's."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -252,9 +206,11 @@ def run_method_b_adversarial_evaluation(n_per_class: int = 20, epsilons=(0.02, 0
 # Method C / Hilbert
 # ---------------------------------------------------------------------------
 
-
 def per_segment_rescaled_signatures(images: torch.Tensor, curve: torch.Tensor,
                                      depth: int, r: float) -> torch.Tensor:
+    """Full per-path adversarial/control evaluation for Method C: FGSM, matched random control,
+    margin-difference numerator, per-segment distances — all 16 Hilbert-curve segments, no exclusion.
+    Returns the same shape of result as run_per_path_adversarial_eval."""
     stream = hilbert_stream(images, curve)
     num_segments = stream.shape[1]
     sig = torch.stack(
@@ -266,18 +222,9 @@ def per_segment_rescaled_signatures(images: torch.Tensor, curve: torch.Tensor,
 def run_hilbert_adversarial_eval(depth: int, n_per_class: int = 20,
                                   epsilons=(0.02, 0.03, 0.05), seed: int = 0,
                                   verbose: bool = True) -> dict:
-    """Full per-path adversarial/control evaluation for Method C, same
-    framework as `run_per_path_adversarial_eval` below (FGSM, matched
-    random control, margin-difference numerator, per-segment distances),
-    applied to the Hilbert-curve segments instead of Method B's reference
-    lines. All 16 segments are used (no a priori "informative subset"
-    exclusion - unlike Method B's structural border lines, there's no a
-    priori reason any particular segment index would be chance-level for a
-    space-filling curve; Stage A's own AUC screen, `distances.
-    evaluate_hilbert_depths`, is the empirical check for that, not an
-    assumption carried in here). Loads the shared canonical SmallCNN/
-    StrongCNN checkpoint (no training - see `run_pgd_comparison`'s
-    docstring for why)."""
+    """Full per-path adversarial/control evaluation for Method C: FGSM, matched random control,
+    margin-difference numerator, per-segment distances — all 16 Hilbert-curve segments, no exclusion.
+    Returns the same shape of result as run_per_path_adversarial_eval."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -339,10 +286,8 @@ def run_hilbert_adversarial_eval(depth: int, n_per_class: int = 20,
 
 
 def summarize_hilbert_result(results: dict) -> dict:
-    """Per model/epsilon, per segment: mean ratio on genuinely adversarial
-    (flipped) pairs vs. mean ratio on the matched control pairs - same
-    definition as Method B's per-path fold-ratio finding, over all 16
-    segments (no exclusion)."""
+    """Per model/epsilon, per segment: mean ratio on genuinely adversarial (flipped) pairs vs mean
+    ratio on matched control pairs, over all 16 segments."""
     summary = {}
     for name, mres in results["models"].items():
         summary[name] = {}
@@ -363,12 +308,8 @@ def summarize_hilbert_result(results: dict) -> dict:
 
 
 def hilbert_robustness_check(results: dict, n_exclude: int = 2) -> dict:
-    """Same spirit as Method B's fold_ratio_robustness: identifies the
-    `n_exclude` segments with the smallest mean baseline distance (the
-    same kind of scale confound flagged for Method B's lines 9/14 -
-    checked here rather than assumed absent) and reports whether the
-    aggregate fold-ratio survives their exclusion.
-    """
+    """Identifies the n_exclude segments with the smallest mean baseline distance and reports whether
+    the aggregate fold-ratio survives their exclusion."""
     summary = summarize_hilbert_result(results)
     report = {}
 
@@ -408,14 +349,8 @@ def hilbert_robustness_check(results: dict, n_exclude: int = 2) -> dict:
 def run_hilbert_adversarial_eval_with_images(depth: int = 3, n_per_class: int = 20,
                                               epsilons=(0.02, 0.03, 0.05), seed: int = 0,
                                               verbose: bool = True) -> dict:
-    """Same checkpoint-loading/attack pipeline as `run_hilbert_adversarial_eval`
-    above, additionally retaining `images`, `labels`, `x_adv`, `x_control`,
-    and the fixed `curve` for gallery plotting (`plots.
-    plot_hilbert_spike_gallery`/`plot_spike_comparison`). No new
-    adversarial generation or metric - given seed=0, reproduces that
-    function's own ratio/distance results exactly (both load the identical
-    canonical checkpoint, so this holds even more strongly now than under
-    independently-trained models)."""
+    """Same pipeline as run_hilbert_adversarial_eval, additionally retaining the images, labels,
+    adversarial and control examples, and the fixed curve, for gallery plotting."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -483,37 +418,15 @@ def run_hilbert_adversarial_eval_with_images(depth: int = 3, n_per_class: int = 
 
 # ---------------------------------------------------------------------------
 # PGD (Method B + Method C)
-#
-# SmallCNN/StrongCNN are trained ONCE and PGD/control/FGSM perturbations are
-# generated ONCE per model/epsilon, then reused for BOTH Method B and Method
-# C's evaluation - the two methods see literally the same perturbed images,
-# not just a matched sample size, which is what makes the head-to-head
-# comparison meaningful rather than coincidental (same discipline
-# `run_stage_b_validation` (method_b_sweep.py) uses, sharing perturbations
-# across finalists the same way). FGSM is also run here, on the same
-# freshly-trained models, purely to report a same-run flip-rate comparison
-# against PGD - it does not feed either method's PGD evaluation.
 # ---------------------------------------------------------------------------
 
 
 def run_pgd_comparison(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), seed: int = 0,
                         pgd_steps: int = 10, verbose: bool = True) -> dict:
-    """Loads the shared canonical SmallCNN/StrongCNN checkpoint (the same
-    trained weights `mnist_example` uses, via `models.train_or_load_*` -
-    no training here), generates PGD (+ magnitude-matched random control,
-    + FGSM for the flip-rate comparison only) perturbations once per
-    model/epsilon, then evaluates BOTH Method B's winning configuration
-    and Method C against the SAME PGD-perturbed images - per-line/per-
-    segment ratios, never merged, same framework as
-    `run_hilbert_adversarial_eval`/`method_b_sweep.run_stage_b_validation`,
-    with `pgd_attack` in place of `fgsm_attack`.
-
-    Previously trained a fresh 3-epoch SmallCNN/StrongCNN pair per call;
-    switched to the canonical checkpoint after a pre-publication audit
-    found that undertrained pair gave an FGSM > PGD fold-ratio reversal
-    that doesn't reproduce on the properly-trained models (PGD, the
-    stronger attack by flip-rate, correctly gives the higher fold-ratio
-    on the canonical checkpoint - see `adversarial.md`)."""
+    """Generates PGD, matched random control, and FGSM (for flip-rate comparison only)
+    perturbations, then evaluates both Method B's winning configuration and Method C on the same
+    PGD-perturbed images — per-line and per-segment ratios, kept separate throughout. 
+    Returns a nested dict, one entry per method and model."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -570,8 +483,7 @@ def run_pgd_comparison(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), seed:
             flip_mask = preds_adv != labels
             flip_fraction = flip_mask.float().mean().item()
 
-            # FGSM on the same model/epsilon - flip-rate comparison only,
-            # does not feed either method's PGD evaluation below.
+            # FGSM on the same model/epsilon - flip-rate comparison only, does not feed either method's PGD evaluation below.
             x_adv_fgsm_c = fgsm_attack(model, images_c, labels, eps)
             with torch.no_grad():
                 preds_fgsm = model(x_adv_fgsm_c).argmax(dim=1)
@@ -625,32 +537,8 @@ def run_pgd_comparison(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), seed:
 
 
 def pgd_fold_summary(results: dict) -> dict:
-    """Per method (b/c): per model/epsilon mean fold-ratio and exception
-    count (mean adversarial ratio <= mean control ratio, on the genuinely
-    flipped subset), plus an overall aggregate across every model x epsilon
-    x line/segment combination - computed exactly the way the FGSM numbers
-    this is meant to sit alongside were reported, so the two are directly
-    comparable (see `adversarial_eval.ipynb`'s PGD section for the current
-    headline figures - the specific numbers here shift with the checkpoint/
-    winner-geometry choice, so aren't hardcoded in this docstring).
-
-    A (model, eps, line/segment) triple whose adversarial or control
-    perturbation leaves that unit's signature unchanged (dist == 0) makes
-    its ratio non-finite and is excluded from every mean-fold below,
-    counted separately as `degenerate` rather than silently averaged in -
-    one such case is enough to send a naive mean to +inf. This hits Method
-    B's `overall_mean_fold` systematically because its winner geometry
-    (`distances.METHOD_B_WINNER_LINES`) includes 2 lines running exactly
-    along MNIST's constant-zero border (`distances.METHOD_B_BORDER_LINE_INDICES`)
-    - a gradient-based attack legitimately produces exactly zero movement
-    there for some images. `method_b`'s summary therefore also reports an
-    `informative_*` breakdown restricted to the 14 non-border lines
-    (`distances.METHOD_B_INFORMATIVE_LINE_INDICES`), mirroring the FGSM
-    all16-vs-informative split (`summarize_border_and_pixel_check`) -
-    use `informative_overall_mean_fold` as Method B's headline PGD figure,
-    not `overall_mean_fold`, for exactly the same reason. Method C's
-    Hilbert segments aren't pinned to fixed border coordinates the way
-    Method B's reference lines are, so no equivalent split is needed there."""
+    """Per method, per model/epsilon: mean fold-ratio and exception count on the genuinely flipped
+    subset, plus an aggregate across every model x epsilon x line/segment combination."""
     summary = {}
     for method_key in ("method_b", "method_c"):
         n_units = results[method_key]["n_lines"] if method_key == "method_b" else results[method_key]["n_segments"]
@@ -726,46 +614,16 @@ def pgd_fold_summary(results: dict) -> dict:
 
 # ---------------------------------------------------------------------------
 # Per-path (Method B)
-#
-# Corrects the framing of the merged-distance evaluation above: don't merge
-# the 16 reference-line paths into any single combined score (not the
-# 496-dim concatenation, not max/top-k/weighted-sum). Instead, treat the 16
-# paths the way the pixel-space Lipschitz work (toy_example/mnist_example)
-# treats individual pixels - as separate coordinates, each producing its
-# own local Lipschitz ratio, examined as a collection, never reduced to one
-# number. Directly mirrors the gradient-norm estimator's per-pixel
-# sensitivity approach, with paths standing in for pixels.
-#
-# Uses the ORIGINAL 8h+8v/depth=4 geometry (`distances.METHOD_B_LINES` -
-# `make_reference_lines()`'s default args), predating the `method_b_sweep.py`
-# hyperparameter sweep - NOT the swept 16h+0v/depth=2 winner geometry used
-# by the headline/PGD/border-check sections above. A "line N" referenced
-# anywhere in this section (or `plots.plot_spike_gallery`/
-# `plot_spike_comparison`) therefore does NOT refer to the same physical
-# line as "line N" elsewhere in this file - see README.md's explicit note
-# that index numbers are not comparable across the two geometries.
 # ---------------------------------------------------------------------------
 
-# The 4 lines running exactly along the image border (row/col 0 or 27) -
-# structural consequence of make_reference_lines()'s default
-# angles_deg=(0, 90), counts=(8, 8): index 0/7 are the first/last of the 8
-# horizontal lines (rows via linspace(0, 27, 8)), index 8/15 the first/last
-# of the 8 vertical lines. Identified by distances.run_per_line_auc_diagnostic's
-# AUC ranking as carrying zero same/different-digit signal (AUC == 0.5000
-# exactly, every one of them) - MNIST digits essentially never touch the
-# border, so these run through background regardless of the image.
-BORDER_LINE_INDICES = (0, 7, 8, 15)
+BORDER_LINE_INDICES = (0, 7, 8, 15) # the four lines that touch the border of the 4x4 grid
 INFORMATIVE_LINE_INDICES = tuple(i for i in range(16) if i not in BORDER_LINE_INDICES)
-# distances.run_per_line_auc_diagnostic's single highest-AUC individual line.
 BEST_LINE_INDEX = 6
-
 
 def per_line_rescaled_signatures(images: torch.Tensor, depth: int = SIGNATURE_DEPTH,
                                   r: float = METHOD_B_R) -> torch.Tensor:
-    """(N, num_lines, sig_dim) rescaled per-line signatures for a batch of
-    images, stopping one step before method_b_signature_distance's
-    concatenation - reuses line_stream/signature_of_stream/rescale_signature
-    unchanged."""
+    """Rescaled per-line signatures for a batch of images, one step before
+    method_b_signature_distance's concatenation. Returns (N, num_lines, sig_dim)."""
     num_lines = METHOD_B_LINES.shape[0]
     stream = line_stream(images, METHOD_B_LINES)
     sig = torch.stack(
@@ -776,14 +634,9 @@ def per_line_rescaled_signatures(images: torch.Tensor, depth: int = SIGNATURE_DE
 
 def run_per_path_adversarial_eval(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05),
                                    seed: int = 0, verbose: bool = True) -> dict:
-    """Same sample/models/attack setup as `run_method_b_adversarial_evaluation`
-    above (loads the shared canonical SmallCNN/StrongCNN checkpoint, same
-    FGSM epsilons and magnitude-matched random control), but computes 16
-    SEPARATE per-line ratios per pair instead of one merged ratio - the
-    per-line signatures and distances aren't retained by that function's
-    own return value, so they're recomputed here via the same underlying
-    calls, not duplicated logic.
-    """
+    """Same sample, models, and attacks as run_method_b_adversarial_evaluation, but computes 16
+    separate per-line ratios per pair instead of one merged ratio. Returns a nested dict, one entry
+    per model."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -817,16 +670,16 @@ def run_per_path_adversarial_eval(n_per_class: int = 20, epsilons=(0.02, 0.03, 0
                 margin_control = margin(model, x_control_c, labels)
                 preds_adv = model(x_adv_c).argmax(dim=1)
 
-            num_adv = (margin_orig - margin_adv).abs()      # (N,)
+            num_adv = (margin_orig - margin_adv).abs() # (N,)
             num_control = (margin_orig - margin_control).abs()
 
             sig_adv = per_line_rescaled_signatures(x_adv)
             sig_control = per_line_rescaled_signatures(x_control)
 
-            dist_adv = per_line_distances(sig_orig, sig_adv)          # (N, num_lines)
-            dist_control = per_line_distances(sig_orig, sig_control)  # (N, num_lines)
+            dist_adv = per_line_distances(sig_orig, sig_adv) # (N, num_lines)
+            dist_control = per_line_distances(sig_orig, sig_control) # (N, num_lines)
 
-            ratio_adv = num_adv.unsqueeze(1) / dist_adv          # (N, num_lines) - never merged
+            ratio_adv = num_adv.unsqueeze(1) / dist_adv # (N, num_lines) - never merged
             ratio_control = num_control.unsqueeze(1) / dist_control
 
             model_result["eps"][eps] = {
@@ -843,12 +696,8 @@ def run_per_path_adversarial_eval(n_per_class: int = 20, epsilons=(0.02, 0.03, 0
 
 
 def summarize_informative_subset(results: dict) -> dict:
-    """Per model/epsilon, per informative line (the 12 non-border lines,
-    line_6 highlighted separately): mean ratio over the GENUINELY adversarial
-    pairs (prediction actually flipped) vs. mean ratio over the SAME index
-    subset's control pairs (same images, for a matched, apples-to-apples
-    comparison - not the full 200-image control set, since the flipped
-    subset is a specific, often small, harder-to-classify slice)."""
+    """Per model/epsilon, per informative line: mean ratio on genuinely adversarial (flipped) pairs
+    vs mean ratio on the same images' control pairs."""
     summary = {}
     for name, mres in results["models"].items():
         summary[name] = {}
@@ -869,19 +718,10 @@ def summarize_informative_subset(results: dict) -> dict:
 
 
 def spike_analysis(results: dict) -> dict:
-    """Per model/epsilon: for every pair, which of the 12 INFORMATIVE lines
-    has the largest ratio (argmax over ratio_adv restricted to
-    INFORMATIVE_LINE_INDICES - the border lines are excluded here
-    specifically because their near-constant, near-zero-distance signatures
-    make their ratio a numerically degenerate near-zero-denominator blowup,
-    not a meaningful "spike"; verified/reported below). Reports the
-    distribution of which line wins most often, for both adversarial and
-    control pairs, plus each distribution's entropy (bits) - a more
-    concentrated/peaked distribution (lower entropy) means the perturbation
-    consistently spikes the same one or two lines; a flatter distribution
-    (entropy close to log2(12) ~= 3.58 bits, uniform over 12 lines) means it
-    spreads roughly evenly.
-    """
+    """Per model/epsilon: for every pair, which of the 12 informative lines has the largest ratio.
+    Border lines are excluded, since their near-zero-distance signatures produce a numerically
+    degenerate ratio, not a meaningful spike. Reports the distribution of winning lines for both
+    adversarial and control pairs."""
     import math
 
     idx_tensor = torch.tensor(INFORMATIVE_LINE_INDICES)
@@ -896,6 +736,7 @@ def spike_analysis(results: dict) -> dict:
             argmax_control = idx_tensor[ratio_control_informative.argmax(dim=1)]
 
             def _distribution_and_entropy(argmax_indices):
+                """Frequency distribution and Shannon entropy of a set of argmax indices."""
                 counts = {i: 0 for i in INFORMATIVE_LINE_INDICES}
                 for v in argmax_indices.tolist():
                     counts[v] += 1
@@ -907,8 +748,6 @@ def spike_analysis(results: dict) -> dict:
             counts_adv, entropy_adv = _distribution_and_entropy(argmax_adv)
             counts_control, entropy_control = _distribution_and_entropy(argmax_control)
 
-            # Sanity check on the degenerate-denominator concern: are border
-            # lines' distances actually much smaller than informative lines'?
             border_dist_mean = e["dist_adv"][:, list(BORDER_LINE_INDICES)].mean().item()
             informative_dist_mean = e["dist_adv"][:, idx_tensor].mean().item()
 
@@ -922,16 +761,14 @@ def spike_analysis(results: dict) -> dict:
 
     return analysis
 
-
-# Robustness check: does the fold-ratio finding above survive excluding
-# lines 9 and 14 (flagged, in the spike-count analysis, as having
-# systematically smaller baseline distances than the other informative
-# lines regardless of perturbation type)? Read-only over an already-computed
-# `run_per_path_adversarial_eval` result - no new signature computation.
+# ===========================================================================
+# Robustness check: does the fold-ratio finding above survive excluding lines 9 and 14 
+# (flagged, in the spike-count analysis, as having systematically smaller baseline distances than the other informative
+# lines regardless of perturbation type)?
+# ==========================================================================
 
 EXCLUDED_LINES = (9, 14)
 ROBUST_LINE_INDICES = tuple(i for i in INFORMATIVE_LINE_INDICES if i not in EXCLUDED_LINES)
-
 
 def _pearson(xs, ys) -> float:
     n = len(xs)
@@ -945,16 +782,9 @@ def _pearson(xs, ys) -> float:
 
 
 def fold_ratio_robustness(results: dict) -> dict:
-    """Per model/epsilon: per-line fold-ratio (mean adversarial ratio on
-    genuinely flipped pairs / mean control ratio on the same pairs - same
-    definition as the fold-ratio finding above), reported for both the
-    original 12-line informative set and the 10-line set with lines 9 and
-    14 excluded, side by side - plus each line's baseline distance (mean of
-    dist_adv and dist_control, i.e. not perturbation-direction-dependent)
-    and the Pearson correlation between baseline distance and fold-ratio
-    across the 10-line set, to check whether the scale confound extends
-    beyond lines 9/14.
-    """
+    """Per model/epsilon: per-line fold-ratio, reported for both the original 12-line informative set
+    and the 10-line set with lines 9 and 14 excluded, alongside each line's baseline distance and its
+    correlation with fold-ratio."""
     summary = summarize_informative_subset(results)
     report = {}
 
@@ -999,11 +829,8 @@ def fold_ratio_robustness(results: dict) -> dict:
 
 def run_robustness_report(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), seed: int = 0,
                            verbose: bool = True) -> dict:
-    """Reproducible entry point: regenerates results via
-    run_per_path_adversarial_eval (deterministic given seed=0, verified
-    bit-for-bit reproducible across independent prior runs) and runs
-    fold_ratio_robustness on it. Prints a summary table.
-    """
+    """Reproducible entry point: regenerates results via run_per_path_adversarial_eval and runs
+    fold_ratio_robustness on them, printing a summary table."""
     results = run_per_path_adversarial_eval(
         n_per_class=n_per_class, epsilons=epsilons, seed=seed, verbose=verbose,
     )
@@ -1027,41 +854,20 @@ def run_robustness_report(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), se
 
 # ---------------------------------------------------------------------------
 # Border-line and pixel check (Method B, winner geometry)
-#
 # Two verification checks on Method B's all-16-line adversarial fold-ratio
 # figures, requested and answered directly rather than assumed:
-#
-# 1. Is the ratio computation protected against near-zero border-line
-#    distances? Checked by direct code inspection first:
-#    `distances.per_line_distances` is a raw `(sig1-sig2).norm(dim=-1)`
-#    with no floor, and every driver that produces this figure divides
-#    `num_adv / dist_adv` directly, with no clamp anywhere. No epsilon
-#    floor exists. `run_border_and_pixel_check`/`summarize_border_and_pixel_check`
-#    below then check empirically whether that theoretical risk actually
-#    manifests: are the border lines' (`distances.METHOD_B_BORDER_LINE_INDICES`)
-#    adversarial distances/ratios disproportionate, and how much does the
-#    all-16-line mean fold-ratio change if they're excluded?
-# 2. Plain pixel-Euclidean's own adversarial fold-ratio, on the EXACT SAME
+# 1. Is the ratio computation protected against near-zero border-line distances?
+# 2. Plain pixel-Euclidean's own adversarial fold-ratio, on the exact same
 #    200-image pool, models, FGSM perturbations, and epsilons as Method B's
-#    winning configuration - `pixel_euclidean_distance` is only ever used
-#    elsewhere to size the magnitude-matched random control, never as its
-#    own competing ratio denominator.
-#
-# Both checks share the same underlying run (same models, same FGSM
-# perturbations, same flip mask), computed once and read two ways.
+#    winning configuration
 # ---------------------------------------------------------------------------
 
 
 def run_border_and_pixel_check(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05), seed: int = 0,
                                 verbose: bool = True) -> dict:
-    """Loads the shared canonical SmallCNN/StrongCNN checkpoint (no
-    training here - see `run_pgd_comparison`'s docstring for why), generates
-    FGSM + magnitude-matched random control once per model/epsilon, then
-    computes (on the IDENTICAL perturbed images): Method B's all-16-line
-    signature ratios (diagnostic only - see `summarize_border_and_pixel_check`),
-    and pixel-Euclidean's own ratio - both from the same `num_adv`/
-    `num_control` numerator, so they're directly comparable on identical
-    pairs."""
+    """Generates FGSM and matched random control once per model/epsilon, then computes Method B's
+    all-16-line signature ratios and pixel-Euclidean's ratio on the identical perturbed images, from
+    the same numerator, for direct comparison."""
     torch.manual_seed(seed)
     models = {}
     for name, loader in [("SmallCNN", train_or_load_small_cnn), ("StrongCNN", train_or_load_strong_cnn)]:
@@ -1142,15 +948,10 @@ def run_border_and_pixel_check(n_per_class: int = 20, epsilons=(0.02, 0.03, 0.05
 
 
 def _fold_and_exceptions(ratio_adv_1d: torch.Tensor, ratio_control_1d: torch.Tensor) -> dict:
-    """`adv_mean`/`ctrl_mean` can be non-finite when a line's adversarial or
-    control perturbation leaves that exact line unchanged (dist == 0) - this
-    happens systematically for border-touching lines/segments (constant-zero
-    MNIST border pixels: a gradient-based attack legitimately produces zero
-    movement there for some images), and is flagged as `degenerate` rather
-    than silently averaged into `fold` (which would let one exact-zero
-    denominator blow the aggregate mean up to inf/absurdly large, as found
-    in the pre-publication audit - see `distances.METHOD_B_BORDER_LINE_INDICES`
-    and `summarize_border_and_pixel_check`'s border-vs-informative split)."""
+    """Mean fold-ratio and exception flag for one set of adversarial vs control ratios. Flagged as
+    degenerate rather than averaged in if a perturbation leaves that line's distance at exactly zero
+    — which happens systematically on constant-zero border pixels and would otherwise send the
+    aggregate fold-ratio to infinity."""
     adv_mean = ratio_adv_1d.mean().item()
     ctrl_mean = ratio_control_1d.mean().item()
     fold = adv_mean / ctrl_mean if adv_mean > ctrl_mean else None
@@ -1161,30 +962,12 @@ def _fold_and_exceptions(ratio_adv_1d: torch.Tensor, ratio_control_1d: torch.Ten
 
 
 def summarize_border_and_pixel_check(results: dict) -> dict:
-    """Three summaries from the one run above:
+    """Three summaries from one run of run_border_and_pixel_check: 
+    - method_b_all16 (diagnostic only, unstable due to border lines), 
+    - border_vs_informative (border and informative lines' distances and folds reported separately, to quantify how much of the all-16 figure the border lines drive),
+    - pixel (pixel-Euclidean's fold on the identical pairs, for direct comparison). 
+    Degenerate (zero-distance) cases are excluded from every mean and counted separately."""
 
-    - `method_b_all16`: the all-16-line mean fold/exceptions - diagnostic
-      only, unstable (see below), never the headline figure.
-    - `border_vs_informative`: border lines' (`distances.METHOD_B_BORDER_LINE_INDICES`)
-      mean adversarial/control distance and fold, reported separately from
-      the informative lines', to check directly whether border lines
-      have disproportionately small distances / inflated ratios - and what
-      the all-16 mean fold becomes with them excluded, to quantify how
-      much of the headline number (if any) they're responsible for.
-    - `pixel`: pixel-Euclidean's own fold/exceptions, same flipped-pairs
-      convention as everywhere else in this project, directly comparable
-      to `method_b_all16` and to the informative-lines figure on IDENTICAL
-      pairs.
-
-    A (model, eps, line) triple whose adversarial or control perturbation
-    leaves that exact line unchanged (dist == 0, `_fold_and_exceptions`'s
-    `degenerate` flag) is excluded from every mean-fold below and counted
-    separately (`degenerate`/`method_b_informative_degenerate`/`pixel_degenerate`)
-    rather than being silently averaged in - one such case is enough to send
-    a naive mean to +inf (found in the pre-publication audit on
-    `method_b_all16`, which is exactly why it's diagnostic-only, never the
-    headline figure - see `distances.METHOD_B_BORDER_LINE_INDICES`).
-    """
     b_all16_folds, b_all16_exceptions, b_all16_degenerate, b_all16_total = [], 0, 0, 0
     b_border_dists_adv, b_border_dists_control = [], []
     b_informative_dists_adv, b_informative_dists_control = [], []

@@ -1,39 +1,14 @@
-"""Layer-decomposed Lipschitz sub-experiment for the CNN.
+"""Layer-decomposed Lipschitz sub-experiment for the CNN: splits f = head o extractor and compares
+the exact and estimated Lipschitz constant of each layer against the whole network's, to test the
+submultiplicative bound L_extractor * L_head >= L_full (Szegedy et al., 2014).
 
-Splits `f = head o extractor` (SmallCNN's conv/relu/pool stack, then its
-final `nn.Linear`) and compares:
-
-- `L_head` -- the Lipschitz constant of the final linear layer, both
-  **exact** (closed-form spectral norm, `estimators.linear_layer_lipschitz`)
-  and **estimated** (via the same pairwise/local-perturbation/gradient-norm
-  machinery used everywhere else in this project, as a calibration check
-  on the estimators themselves).
-- `L_extractor` -- the empirical Lipschitz constant of the feature
-  extractor, `||extractor(x1)-extractor(x2)|| / ||x1-x2||` in raw pixel
-  space.
-- `L_full` -- the empirical Lipschitz constant of the whole network.
-
-**Important: `L_full` here is measured on the full 10-d logit vector, not
-the scalar margin `run_experiment.py` uses elsewhere.** `f = head o
-extractor` (this module's Context) is logit-valued, and the
-submultiplicative per-layer bound this module checks --
-`L_extractor * L_head >= L_full` (Szegedy et al., 2014, "Intriguing
-Properties of Neural Networks") -- only rigorously applies to the same
-function `L_extractor * L_head` actually bounds. The margin function
-(`models.margin_fn`) is itself Lipschitz w.r.t. the logit vector (with a
-small constant, at most sqrt(2) -- it's a min of sqrt(2)-Lipschitz
-coordinate differences), but is a *different*, generally smaller quantity
-than the raw logit vector's own Lipschitz constant, so reusing it here
-would not actually test the cited bound. The estimator *machinery*
-(pairwise/local-perturbation/gradient-norm) is reused as-is; only the
-target function changes, from margin to full logits.
+L_full here is measured on the full logit vector, not the scalar margin used elsewhere in this
+project — the bound only applies to the function the product actually bounds.
 """
 
 from pathlib import Path
-
 import pandas as pd
 import torch
-
 from mnist_example.data import load_mnist, get_dev_subset, make_loader
 from mnist_example.estimators import (
     euclidean_distance_fn,
@@ -47,72 +22,28 @@ from mnist_example.models import SmallCNN, FlattenedInputWrapper, train_classifi
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 METHODS = ("pairwise", "grid", "gradient")
-# "grid" here is this task's requested name for the finite-difference
-# method -- this project's own name for it is local_perturbation_lipschitz
-# (toy_example's "_grid" suffix means something different there:
-# evaluated over many query points at once, not a distinct estimation
-# method). Mapped to the existing function rather than introducing a
-# second, redundant "grid" method that doesn't otherwise exist here.
-
 
 def extractor_output_fn(model, x, y):
-    """output_fn wrapper for `model.extractor`: flat (N, 784) pixel input
-    (matching every other estimator call site's convention in this
-    project), reshaped to (N,1,28,28) before the conv stack -- same
-    reshape `FlattenedInputWrapper` does for the full model. Returns
-    flattened features, (N, feat_dim). `y` is unused (the extractor
-    doesn't depend on the label) but still accepted, so this matches the
-    (model, x, y) -> Tensor convention every estimator in estimators.py
-    expects.
-    """
+    """output_fn for model.extractor: flat (N, 784) pixel input. Returns (N, feat_dim)."""
     return model.extractor(x.reshape(x.shape[0], 1, 28, 28))
 
 
 def head_output_fn(model, x, y):
-    """output_fn wrapper for `model.head`: `x` here is already-extracted
-    RAW (un-normalized) features, (N, feat_dim) -- distinct from
-    `extractor_output_fn`/`margin_fn`, which both take pixel input. Returns
-    the full (N, num_classes) logit vector (not a margin). `y` unused.
-    """
+    """output_fn for model.head: (N, feat_dim) already-extracted features. Returns (N, num_classes) logits."""
     return model.head(x)
 
 
 def full_logits_output_fn(model, x, y):
-    """output_fn wrapper for the full network `f = head o extractor`:
-    flat (N, 784) pixel input, full (N, num_classes) logit output. `model`
-    must already accept flat input (wrap with `FlattenedInputWrapper`
-    first, as `layer_decomposition_experiment` does internally). This is
-    the function `L_extractor * L_head` is supposed to bound -- see this
-    module's docstring for why it's the full logit vector, not the margin.
-    """
+    """output_fn for the full network: flat (N, 784) pixel input. Returns (N, num_classes) logits."""
     return model(x)
 
 
 def fit_feature_normalizer(model, x_train, relative_floor=1e-2, absolute_floor=1e-8):
-    """Fits a per-dimension (mean, std) on `model.extractor(x_train)`,
-    once -- meant to be called a single time per trained model and reused
-    across every subsequent evaluation of that model (refitting per query
-    batch would make L_head/L_extractor depend on which batch happened to
-    be used to normalize, not just on the model itself, contaminating any
-    comparison across models/widths).
-
-    `std` is floored at `max(relative_floor * median(std), absolute_floor)`,
-    not just `absolute_floor` alone -- checked directly on a real trained
-    CNN, not assumed: dead ReLU/MaxPool units (a channel that never
-    activates on the normalization sample) are common (92/1568 features on
-    one trained SmallCNN checkpoint) and land std exactly at whatever floor
-    is used. An `absolute_floor` alone (e.g. 1e-8) barely constrains
-    anything -- dividing by 1e-8 amplifies any perturbation-induced change
-    in that dimension by up to 1e8x, which single-handedly dominated
-    `L_extractor`'s finite-difference (`"grid"`) estimate in practice
-    (inflating it into the tens of millions, an artifact of the
-    normalization floor, not a real property of the network). Tying the
-    floor to the *other* features' typical scale (their median std) instead
-    keeps a dead dimension from silently exploding the estimate while still
-    letting genuinely small-but-real variation through.
-
-    Returns (mean, std), each shape (feat_dim,).
-    """
+    """Fits a per-dimension mean/std normalizer on the extractor's output features, to be used in
+    `layer_decomposition_experiment` when `normalize_features=True`. Returns (mean, std) tensors, 
+    each of shape (feat_dim,). `std` is clamped to a floor to avoid near-zero 
+    scales dominating the Lipschitz estimate. 
+    The floor is set to max(relative_floor * median(std), absolute_floor)."""
     with torch.no_grad():
         features = extractor_output_fn(model, x_train, None)
     mean = features.mean(dim=0)
@@ -123,47 +54,23 @@ def fit_feature_normalizer(model, x_train, relative_floor=1e-2, absolute_floor=1
 
 
 def _make_normalized_extractor_output_fn(mean, std):
+    """Wraps extractor_output_fn to standardize its output by (mean, std)."""
     def _fn(model, x, y):
         return (extractor_output_fn(model, x, y) - mean) / std
     return _fn
 
 
 def _make_normalized_head_output_fn(mean, std):
-    """output_fn(model, z, y) = model.head(z*std + mean): treats `z` as
-    STANDARDIZED features and un-standardizes before applying the actual
-    (trained-on-raw-features) head weights, so this function's INPUT
-    domain matches the normalized extractor's OUTPUT domain exactly --
-    composing them, `normalized_head(normalized_extractor(x))`, gives back
-    `model.head(model.extractor(x)) = model(x)` exactly (the
-    standardization cancels), so the decomposition still bounds the same
-    original function regardless of `normalize_features`.
-    """
+    """Wraps head_output_fn to un-standardize its input first, so the composition of the normalized
+    extractor and this function still equals the original model exactly."""
     def _fn(model, z, y):
         return head_output_fn(model, z * std + mean, y)
     return _fn
 
 
 def _effective_head_lipschitz_exact(head, std=None):
-    """Exact closed-form Lipschitz constant of `head`, w.r.t. whichever
-    input scale `L_head_estimated` is actually measured on -- **always
-    comparable to L_head_estimated, unlike unconditionally calling
-    `linear_layer_lipschitz(head)` would be**.
-
-    If `std` is None (normalize_features=False): exactly
-    `linear_layer_lipschitz(head)` on the raw weights.
-
-    If `std` is given (normalize_features=True): accounts for the
-    standardization folded into the head's input (see
-    `_make_normalized_head_output_fn`). `standardized_head(z) =
-    head(z*std + mean) = (W @ diag(std)) @ z + (W@mean + b)` -- still
-    linear in `z`, with effective weight `W @ diag(std)` (scaling column j
-    of W by std[j]) -- so the exact spectral norm is computed on *that*
-    effective weight, not the raw one. Without this adjustment,
-    `L_head_exact` and `L_head_estimated` would silently measure the head
-    at two different input scales whenever normalize_features=True,
-    making them incomparable (and the looseness_ratio check meaningless)
-    -- exactly the misuse this function exists to prevent.
-    """
+    """Returns the exact spectral norm of the head's weight matrix, adjusted for feature standardization
+    if `std` is provided (the standardizer's per-dimension std, shape (feat_dim,))."""
     if std is None:
         return linear_layer_lipschitz(head)
     W_effective = head.weight.detach() * std.unsqueeze(0)
@@ -173,60 +80,17 @@ def _effective_head_lipschitz_exact(head, std=None):
 def layer_decomposition_experiment(model, x_query, y_query, x_train_for_norm=None,
                                     method="pairwise", normalize_features=True,
                                     radius=1.0, n_directions=40, max_pairs=None, seed=0, verbose=True):
-    """Computes L_head (exact + estimated), L_extractor (estimated), and
-    L_full (estimated) for a trained CNN, and the resulting looseness
-    ratio of the per-layer Lipschitz bound.
+    """Computes L_head (exact and estimated), L_extractor (estimated), L_full (estimated), and the
+    resulting looseness ratio, for a trained SmallCNN. method is "pairwise", "grid" or "gradient".
+    normalize_features standardizes extractor features before estimation.
+    
+    Warns (without raising) if looseness_ratio falls below 1, since that violates the theoretical
+    bound and most likely reflects estimator under-sampling. looseness_ratio_estimated is reported
+    separately and is expected to fall below 1 more often, since it uses the estimated (not exact)L_head.
 
-    `model`: a trained `SmallCNN` (raw, i.e. with `.extractor`/`.head`
-    directly accessible -- NOT pre-wrapped in `FlattenedInputWrapper`;
-    wrapped internally here only for the L_full computation, where it's
-    needed).
-    `x_query`, `y_query`: flat (N, 784) pixel points / (N,) labels to
-    evaluate the Lipschitz estimates on.
-    `x_train_for_norm`: flat (M, 784) pixel points to fit the feature
-    standardizer on (required if `normalize_features=True`; ignored
-    otherwise). Should be a training-set sample, not `x_query` itself --
-    fitting normalization on the same points being evaluated would leak
-    query-set statistics into the "calibration."
-    `method`: "pairwise", "grid" (finite-difference,
-    `local_perturbation_lipschitz`), or "gradient" (autograd; the "gradient"
-    branch uses the exact per-example Jacobian spectral norm for
-    L_head/L_extractor, since both are vector-valued -- see
-    `estimators.gradient_norm_estimate`'s docstring).
-    `normalize_features`: standardize extractor features (per-dimension
-    mean/std, fit once via `x_train_for_norm`) before computing L_extractor
-    and L_head, so no single badly-scaled feature dimension dominates the
-    estimate. `L_head_exact` is adjusted to match (see
-    `_effective_head_lipschitz_exact`) rather than silently comparing two
-    different input scales.
+    Returns a dict with L_head_exact, L_head_estimated, L_extractor_estimated, L_full_estimated,
+    product, looseness_ratio, product_estimated, and looseness_ratio_estimated."""
 
-    Returns:
-        {
-            "L_head_exact": float,
-            "L_head_estimated": float,
-            "L_extractor_estimated": float,
-            "L_full_estimated": float,
-            "product": float,                      # L_extractor_estimated * L_head_exact
-            "looseness_ratio": float,               # product / L_full_estimated
-            "product_estimated": float,             # L_extractor_estimated * L_head_estimated
-            "looseness_ratio_estimated": float,     # product_estimated / L_full_estimated
-        }
-
-    If `looseness_ratio < 1` (violating the theoretical submultiplicative
-    bound -- Szegedy et al. 2014), prints a warning rather than raising:
-    this is far more likely to indicate an estimator under-sampling issue
-    (too few pairs/directions/query points) than a genuine violation of
-    the bound, and should surface for inspection, not silently fail or
-    silently pass.
-
-    `looseness_ratio_estimated` (using `L_head_estimated` in the product
-    instead of the exact spectral norm) is reported alongside but is a
-    *different* quantity, not a drop-in substitute: `L_head_estimated` is
-    itself only a lower bound on the true `L_head` (same reasoning as
-    `L_extractor_estimated`/`L_full_estimated`), so `looseness_ratio_estimated
-    <= looseness_ratio` always, and it dropping below 1 is expected/normal
-    rather than a bug to flag -- no warning is attached to it.
-    """
     if method not in METHODS:
         raise ValueError(f"unknown method {method!r}, expected one of {METHODS}")
     if normalize_features and x_train_for_norm is None:
@@ -271,15 +135,6 @@ def layer_decomposition_experiment(model, x_query, y_query, x_train_for_norm=Non
     product = L_extractor_estimated * L_head_exact
     looseness_ratio = product / L_full_estimated if L_full_estimated > 1e-12 else float("inf")
 
-    # All-estimated counterpart: product/looseness_ratio using L_head_ESTIMATED
-    # instead of the exact spectral norm. This is NOT the quantity the
-    # Szegedy et al. submultiplicative bound guarantees >= 1 -- L_head_estimated
-    # is itself only a lower bound on the true L_head (same Cauchy-Schwarz
-    # reasoning as L_extractor_estimated/L_full_estimated), so
-    # product_estimated <= product and looseness_ratio_estimated <=
-    # looseness_ratio always. Falling below 1 here is expected/normal, not
-    # a sampling-issue flag the way looseness_ratio < 1 is -- reported
-    # plainly, no warning attached.
     product_estimated = L_extractor_estimated * L_head_estimated
     looseness_ratio_estimated = product_estimated / L_full_estimated if L_full_estimated > 1e-12 else float("inf")
 
@@ -307,46 +162,14 @@ def layer_decomposition_experiment(model, x_query, y_query, x_train_for_norm=Non
 
 # ---------------------------------------------------------------------------
 # CNN-width capacity sweep
-#
-# No existing capacity sweep exists in mnist_example to extend (unlike
-# toy_example's MLP-width sweep, run_experiment.sweep_over_capacity) --
-# this builds one specifically for the layer-decomposition comparison,
-# self-contained in this module rather than woven into run_experiment.py's
-# main driver, matching this module's own scope. Same CSV/dataframe
-# convention (one row per width, all requirements 1-5's outputs as
-# columns) so this can be saved/loaded like any other results/ artifact.
 # ---------------------------------------------------------------------------
 
 def run_cnn_width_sweep(widths=(4, 8, 16, 32, 64), epochs=6, train_subset_size=5000,
                          n_query_points=40, n_train_norm_points=500,
                          method="pairwise", normalize_features=True, seed=0, verbose=True,
                          save_path=RESULTS_DIR / "layer_decomposition_width_sweep.csv"):
-    """Trains a fresh `SmallCNN` at each width in `widths`
-    (`conv_channels=(width, 2*width)`, preserving SmallCNN's own default
-    16/32 1:2 channel ratio -- width=16 reproduces the project's default
-    CNN exactly), runs `layer_decomposition_experiment` at each, and
-    returns a `pandas.DataFrame` with one row per width.
-
-    Trains on a `train_subset_size`-point dev subset (not the full 60k
-    training set) to keep the sweep fast across several widths -- this is
-    a diagnostics check of how the looseness ratio moves with capacity,
-    not an accuracy benchmark (see `models.SmallCNN`'s own docstring for
-    the same reasoning applied to the project's single default CNN).
-    `method="pairwise"` is the default specifically for sweep speed
-    (the `"gradient"` method's exact per-example Jacobian is
-    correspondingly slower per width -- see
-    `estimators.gradient_norm_estimate`'s docstring -- fine for a single
-    model, slower multiplied across a whole sweep).
-
-    The same held-out query points and normalization-fitting points are
-    reused across every width (fixed by `seed`), so differences between
-    rows reflect the model, not which points happened to be sampled.
-
-    Columns: width, train_acc, test_acc, L_head_exact, L_head_estimated,
-    L_extractor_estimated, L_full_estimated, product, looseness_ratio.
-
-    Saves the dataframe to `save_path` as CSV (set to None to skip saving).
-    """
+    """Trains a fresh SmallCNN at each width and runs layer_decomposition_experiment on each. 
+    Returns a DataFrame with one row per width, also saved to save_path as CSV."""
     train = load_mnist(train=True)
     test = load_mnist(train=False)
     dev = get_dev_subset(train, n=train_subset_size, seed=seed)

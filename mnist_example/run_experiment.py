@@ -1,4 +1,4 @@
-"""This file contains the main driver for the MNIST Lipschitz experiment, including the ratio-distribution analysis (Steps 2b/4b)."""
+"""Main driver for the MNIST Lipschitz experiment, including the ratio-distribution analysis."""
 
 import json
 import os
@@ -45,30 +45,10 @@ SEED = 0
 
 def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subsample_frac=0.8,
                              n_points=100, seed=SEED, verbose=True, embed_fn=None):
-    """No-ground-truth substitute for validating against a true L*: for each
-    epsilon, draw independent random subsamples of `dataset`, fit Sigma on
-    each, and compute the mean Mahalanobis gradient-norm estimate. Reports
-    the coefficient of variation (std/mean) across subsamples -- a stable
-    epsilon reproduces its estimate across resamples; an unstable one is
-    fitting noise in that subsample's covariance.
-
-    Uses the MEAN gradient-norm estimate, not pairwise_lipschitz's max:
-    empirically, max-based estimates are dominated by extreme-value sampling
-    noise (cv 0.04-0.26, no clean trend) while the mean gives a clean,
-    interpretable trend (cv 0.01-0.04).
-
-    Uses a fixed reference model's margin_fn throughout, since epsilon
-    selection only needs a consistent yardstick, not the final model.
-
-    If `embed_fn` is given (e.g. embeddings.py::elementwise_embedding), the
-    precision matrix is fit on each subsample's *embedded* covariance
-    (`svd_ridge_precision(embed_fn(x_sub), eps)`) instead of the raw pixel
-    covariance, and `gradient_norm_estimate`'s embed_fn-aware pullback-metric
-    path (see its docstring) supplies the correctly-dimensioned dual norm --
-    this is what makes epsilon selection meaningful for an embedded space at
-    all, rather than raising a shape mismatch. Leaving `embed_fn` unset (the
-    default) leaves existing behavior exactly unchanged.
-    """
+    """For each candidate epsilon, fits the Mahalanobis precision matrix on independent random
+    subsamples and reports the coefficient of variation of the mean gradient-norm estimate across
+    them — a stable epsilon reproduces its estimate across resamples, an unstable one is fitting
+    noise. If embed_fn is given, fits and evaluates in the embedded space instead of raw pixels."""
     generator = torch.Generator().manual_seed(seed)
     N = len(dataset)
     n_sub = int(round(N * subsample_frac))
@@ -100,9 +80,8 @@ def epsilon_stability_check(model, dataset, epsilon_values, n_subsamples=5, subs
 
 
 def select_epsilon(epsilon_values, cond_numbers, cv_values, max_cond=1e4, max_cv=0.15, verbose=True):
-    """Smallest epsilon meeting both a condition-number and a
-    stability (cv) bound. Falls back to the lowest-cv epsilon, with a
-    warning, if none qualify."""
+    """Smallest epsilon meeting both a condition-number and a stability (cv) bound. Falls back to the
+    lowest-cv epsilon, with a warning, if none qualify."""
     candidates = [eps for eps, cond, cv in zip(epsilon_values, cond_numbers, cv_values)
                   if cond <= max_cond and cv <= max_cv]
     if candidates:
@@ -121,24 +100,9 @@ def select_epsilon(epsilon_values, cond_numbers, cv_values, max_cond=1e4, max_cv
 
 def k_stability_check(model, dataset, k_values, n_subsamples=5, subsample_frac=0.8,
                        n_points=100, seed=SEED, verbose=True, embed_fn=None):
-    """`epsilon_stability_check`'s analogue for `distance.py::truncated_precision`: sweeps the
-    number of retained top-variance dimensions `k` instead of a ridge epsilon, using the same
-    multi-subsample coefficient-of-variation methodology (mean gradient-norm estimate per
-    subsample, cv = std/mean across subsamples).
-
-    **Deliberately shares one SVD per subsample across every `k` value**, unlike
-    `epsilon_stability_check`, which redraws a fresh subsample per epsilon candidate. Two reasons:
-    (1) different `k`'s are nested truncations of the exact same SVD (`k=5`'s top eigenvectors are
-    a strict prefix of `k=10`'s), so refitting per `k` would just repeat identical work at smaller
-    `k`; and (2) comparing cv across `k` on the *same* resampling draws isolates the effect of
-    truncation itself, rather than conflating it with independent resampling noise per `k`. This
-    also makes the sweep dramatically cheaper: `n_subsamples` SVDs total per feature space, not
-    `n_subsamples * len(k_values)`.
-
-    Uses a fixed reference model's `margin_fn` throughout, matching `epsilon_stability_check`'s
-    "one cheap, consistent yardstick" convention. `embed_fn` follows the same convention as
-    `epsilon_stability_check`/`gradient_norm_estimate`: leaving it unset checks raw pixel space.
-    """
+    """epsilon_stability_check's analogue for truncated-eigenvalue Mahalanobis: sweeps the number of
+    retained top-variance dimensions k instead of a ridge epsilon, sharing one SVD per subsample
+    across every k for efficiency and a fair comparison."""
     generator = torch.Generator().manual_seed(seed)
     N = len(dataset)
     n_sub = int(round(N * subsample_frac))
@@ -173,11 +137,8 @@ def k_stability_check(model, dataset, k_values, n_subsamples=5, subsample_frac=0
 
 
 def select_k(k_values, cond_numbers, cv_values, max_cond=1e4, max_cv=0.15, verbose=True):
-    """Largest k meeting both a condition-number and a stability (cv) bound -- unlike
-    `select_epsilon` (smallest epsilon preferred, since less regularization is better once
-    stable), truncated-eigenvalue Mahalanobis prefers to retain as much information (as large a k)
-    as possible while staying stable. Falls back to the lowest-cv k, with a warning, if none
-    qualify."""
+    """Largest k meeting both a condition-number and a stability (cv) bound. 
+    Falls back to the lowest-cv k, with a warning, if none qualify."""
     candidates = [k for k, cond, cv in zip(k_values, cond_numbers, cv_values)
                   if cond <= max_cond and cv <= max_cv]
     if candidates:
@@ -212,10 +173,9 @@ def _build_models_and_data(seed):
 
 def _run_estimators_for_model(model, x_query, y_query, distance_fn, precision=None,
                                local_radius=1.0, n_directions=20, seed=SEED):
-    """Runs all three Lipschitz sub-methods for one model under one distance
-    metric. `model` must accept flat (N, 784) input. Returns scalar
-    summaries plus i_pair/j_pair (the argmax pair's indices) and the full
-    per-point local/gradient arrays."""
+    """Runs all three Lipschitz sub-methods for one model under one distance metric. 
+    model must accept flat (N, 784) input. 
+    Returns scalar summaries, the argmax pair's indices, and the full per-point local/gradient arrays."""
     L_pairwise, i_pair, j_pair = pairwise_lipschitz(model, x_query, y_query, margin_fn, distance_fn)
 
     local_vals = local_perturbation_lipschitz(model, x_query, y_query, margin_fn, distance_fn,
@@ -234,33 +194,18 @@ def _run_estimators_for_model(model, x_query, y_query, distance_fn, precision=No
         "grad_mean": grad_vals.mean().item(),
     }
 
-
-
 # ---------------------------------------------------------------------------
-# Step 2b/4b: ratio distribution, all pairs vs. nearest neighbors
+# Ratio distribution, all pairs vs. nearest neighbors
 # ---------------------------------------------------------------------------
 
 def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_pool, distance_fn,
                                      exclude_idx=None, n_points=1000, k_neighbors=5,
                                      max_pairs=None, top_k_images=6, seed=SEED, verbose=True):
-    """Compares the full pairwise ratio distribution against ratios
-    restricted to nearest-neighbor pairs in raw pixel space, on a
-    stratified-by-class subset (disjoint from `exclude_idx`).
-
-    Nearest neighbors are found in raw pixel space regardless of
-    `distance_fn`, so the comparison isolates one question: do pairs a
-    human would call visually similar show different ratios than the
-    general pair population? The ratio itself always uses margin_fn/
-    distance_fn, never raw pixel distance -- only pair *selection* uses
-    raw pixels.
-
-    Generic over model/distance_fn, so the same call covers any
-    model/metric combination without new code.
-
-    Returns dicts of tensors/arrays: ratios, pair indices, the subset and
-    its predictions, top_near_neighbor_pairs, a scalar `summary`, and
-    `arrays` (numpy, prefixed `{metric_name}_{model_name}_...` for saving).
-    """
+    """Compares the full pairwise ratio distribution against ratios restricted to nearest-neighbour
+    pairs in raw pixel space, on a stratified subset. Nearest neighbours are always found in raw 
+    pixel space, regardless of distance_fn, so the comparison isolates whether visually similar pairs
+    show different ratios than the general population. Returns ratios, pair indices, the subset and
+    its predictions, the top near-neighbour pairs, a summary dict, and arrays for saving."""
 
     subset_idx = stratified_subset_idx(y_pool, n_points, seed=seed, exclude_idx=exclude_idx)
     x_subset = x_pool[subset_idx]
@@ -272,8 +217,6 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
     all_pairs_ratio, all_ii, all_jj = pairwise_lipschitz_all(
         model, x_subset, y_subset, margin_fn, distance_fn, max_pairs=max_pairs, seed=seed)
 
-    # sklearn's threaded kneighbors query can segfault alongside torch
-    # (conflicting OpenMP runtimes) -- force single-threaded for this call only.
     _prev_omp_threads = os.environ.get("OMP_NUM_THREADS")
     os.environ["OMP_NUM_THREADS"] = "1"
     try:
@@ -292,8 +235,6 @@ def run_ratio_distribution_analysis(model, model_name, metric_name, x_pool, y_po
     near_ratio, near_dist, near_margin_diff = ratio_and_components_for_pairs(
         model, x_subset, y_subset, margin_fn, distance_fn, near_ii, near_jj)
 
-    # Dedup by canonical (min(i,j), max(i,j)) -- mutual nearest neighbors
-    # otherwise appear twice as a mirrored duplicate.
     sorted_idx = torch.argsort(near_ratio, descending=True)
     top_near_neighbor_pairs = []
     seen_canonical = set()
@@ -357,47 +298,11 @@ def run_embedding_degree_sweep(
     max_cond=1e4, max_cv=0.05, n_ratio_points=1000, k_neighbors=5,
     seed=SEED, verbose=True,
 ):
-    """Repeats epsilon selection + ratio-distribution analysis, once per degree in `degrees`,
-    for `embeddings.py::elementwise_embedding` at that degree under Mahalanobis distance --
-    exercising the embed_fn-aware path in `epsilon_stability_check` and
-    `gradient_norm_estimate` (see their docstrings), which used to raise a dimension-mismatch
-    error for any degree > 1: a precision matrix sized for raw 784-pixel space cannot pair with
-    an embedded, higher-dimensional gradient.
+    """Repeats epsilon selection and ratio-distribution analysis once per degree, for 
+    elementwise_embedding under Mahalanobis distance. Trains its own reference logistic regression
+    model if one isn't given. Opt-in — not called from main(). Returns degree_results, ratio_results,
+    the reference model, train/test data, and the summary figure. Also saves results and plots to disk."""
 
-    Matches the setup validated in exploratory work before being promoted here: epsilon is
-    selected on a small, fixed `epsilon_pool_size`-point pool (`get_dev_subset`, not the full
-    60k) -- cheap enough to sweep several candidate epsilons x several subsamples x every degree
-    without retraining anything -- while the *final* precision matrix used for the
-    ratio-distribution analysis is fit on the full `train` set, matching every other precision
-    matrix in this file (e.g. `run_mnist_experiment`'s Mahalanobis step). Pass a pre-built
-    `epsilon_pool` to pin exactly which points are used (e.g. for an apples-to-apples test against
-    a raw-pixel baseline computed on the same pool); otherwise one is drawn via `get_dev_subset`.
-
-    Uses logistic regression as the reference model throughout, matching
-    `epsilon_stability_check`'s existing "one cheap, consistent yardstick" convention. `degree=1`
-    is `elementwise_embedding`'s identity case, so its results should closely match the
-    pre-existing raw-pixel (`embed_fn=None`) Mahalanobis pipeline on the same pool/model/seed --
-    checked directly in
-    `tests/test_epsilon_selection.py::test_run_embedding_degree_sweep_degree_1_matches_raw_pixel_baseline`,
-    since that's the only degree with a raw-pixel result to compare against.
-
-    If `lr_model`/`train`/`test` aren't given, this trains its own reference model and loads MNIST
-    fresh -- self-contained like `toy_example`'s opt-in seed-averaged sweep, at the cost of
-    retraining a model already trained by `run_mnist_experiment()` if that was also called. Pass
-    an already-trained model (and/or `train`/`test`) to skip that retraining.
-
-    This is markedly slower than `run_mnist_experiment()` alone -- fitting a precision matrix on
-    the full 60k-point set at `degree=3` means an SVD of a `(60000, 2352)` matrix, repeated across
-    every degree -- and is deliberately **not** called from `main()` (mirrors
-    `toy_example.run_experiment.run_gap_N_sweep_seed_averaged`'s "opt-in, not in main()"
-    convention); run it directly, e.g. from the notebook or the CLI.
-
-    Returns a dict: `degree_results` (keyed by degree, each holding `selected_epsilon`,
-    `epsilon_values`/`cond_numbers`/`cv_values` -- the full per-epsilon sweep --
-    `cond_number_at_selected_epsilon`, and `ratio_summary`), `lr_model`/`train`/`test` (for reuse
-    by a caller), and `figure` (`plots.plot_embedding_degree_sweep`'s output). Also saves a
-    summary JSON, the merged ratio-distribution arrays, and the plot to `results/`.
-    """
     torch.manual_seed(seed)
     if train is None:
         train = load_mnist(train=True)
@@ -478,52 +383,12 @@ def run_smoothing_sweep(
     max_cond=1e4, max_cv=0.05, n_ratio_points=300, k_neighbors=5, n_purity_points=1000,
     gallery_digits=(0, 1, 3, 5, 7, 9), seed=SEED, verbose=True,
 ):
-    """Repeats epsilon-selection + ratio-distribution analysis, once per Gaussian-blur strength
-    `sigma` in `sigmas`, for `smoothing.py::smoothed_cross_terms_embedding` -- tests whether
-    blurring the raw image before computing `embeddings.py::local_patch_cross_terms` fixes that
-    embedding's categorical Mahalanobis epsilon-selection failure (`distance_measures.md`'s "Epsilon selection
-    fails categorically for this embedding" section: cv 0.91-1.45 against a `cv<=0.05` bound at
-    every epsilon tried on the *unblurred* embedding). `sigma=0` reproduces that exact unblurred
-    case (`smoothed_cross_terms_embedding(x, 0)` is `local_patch_cross_terms(x)` unchanged), so this
-    sweep's first row is a direct determinism cross-check against that already-documented result,
-    not a fresh, unverifiable starting point.
-
-    Follows `run_embedding_degree_sweep`'s established structure and defaults (same epsilon pool
-    size/values, same `epsilon_stability_check` call, same `select_epsilon` bound), with two
-    changes specific to this embedding:
-
-    - **`n_ratio_points` defaults to 300, not 1000.** `local_patch_cross_terms`'s 3920-dimensional
-      output already exhausted this machine's memory/swap at 1000 points (~499,500 gathered pairs)
-      in the earlier Euclidean follow-up (distance_measures.md's Appendix)
-      -- this sweep repeats that embedding's memory footprint up to 6 times (once per sigma), so it
-      inherits that same reduced point count preemptively rather than discovering the same ceiling
-      6 times over.
-    - **Mahalanobis is only computed when epsilon selection actually passes both bounds at that
-      sigma** (`cond<=max_cond` and `cv<=max_cv` for at least one candidate epsilon) -- unlike
-      `run_embedding_degree_sweep`, which always has a stable epsilon to fall back to.
-      `select_epsilon`'s fallback (lowest-cv epsilon among uniformly bad candidates, with its own
-      warning) is exactly the mechanism that produced the *unreliable* `epsilon=1` fallback number
-      documented in `distance_measures.md` for the unblurred embedding -- computing an expensive full-60k-point
-      Mahalanobis ratio-distribution analysis on top of a fallback epsilon that never met the
-      stability bound would just repeat that same caveat 6 times without adding information. Rows
-      where this is skipped have `mahalanobis_ratio_summary=None`.
-
-    Each sigma's row also gets a `distance.py::knn_label_purity` embedding-quality number on a
-    fixed, sigma-independent validation subset, and a visual gallery
-    (`plots.py::plot_smoothing_gallery`) of a handful of sample digits blurred at that sigma, to
-    directly check the risk this whole sweep exists to guard against: too much smoothing making
-    different digits look alike.
-
-    Returns a dict: `sigma_results` (keyed by sigma, each holding the epsilon sweep, `min_cv`,
-    `stability_pass`, `selected_epsilon`, `knn_label_purity`, `euclidean_ratio_summary`,
-    `mahalanobis_ratio_summary` -- `None` when skipped -- and `gallery_figure`), `stability_figure`,
-    `ratio_figure`, plus `lr_model`/`train`/`test` for reuse by a caller. Also saves a summary JSON
-    (figures excluded -- not JSON-serializable), the merged ratio-distribution arrays, and both
-    summary plots plus one gallery PNG per sigma to `results/`.
-
-    Deliberately **not** called from `main()` (mirrors `run_embedding_degree_sweep`'s own opt-in
-    convention) -- run it directly, e.g. from `notebook_distance_measures.ipynb`'s smoothing section.
-    """
+    """Repeats epsilon selection and ratio-distribution analysis once per Gaussian-blur strength
+    sigma, for smoothed_cross_terms_embedding, testing whether blurring fixes that embedding's 
+    epsilon-selection instability. Mahalanobis is only computed at sigmas where epsilon selection
+    passes; skipped rows have mahalanobis_ratio_summary=None. Opt-in — not called from main(). 
+    Returns sigma_results, both summary figures, and the reference model and data. Also saves results, arrays
+    and plots to disk."""
     torch.manual_seed(seed)
     if train is None:
         train = load_mnist(train=True)
@@ -641,31 +506,9 @@ def run_smoothing_sweep(
 # ---------------------------------------------------------------------------
 
 def run_class_separation_check(train=None, test=None, n_points=300, seed=SEED, verbose=True):
-    """Runs `class_separation_ratio` against a fixed set of 4 distance metrics, all evaluated on
-    the same stratified subsample of `test`: plain Euclidean on raw pixels; `local_patch_cross_terms`
-    + Euclidean, unsmoothed (`sigma=0`); `smoothed_cross_terms_embedding` + Euclidean at `sigma=1`
-    (the established sweet spot, `distance_measures.md`'s smoothing sub-experiment); and the same `sigma=1`
-    embedding + Mahalanobis -- **only meaningful since the `torch.linalg.pinv` fix and
-    `RADIUS_MULTIPLIER=5` default change**, since this Mahalanobis metric categorically failed
-    epsilon-selection stability under the pre-fix numerics and had no valid precision matrix to use
-    at all before that.
-
-    The Mahalanobis precision matrix is fit on the full training set at `epsilon=0.01` -- the
-    epsilon actually selected for `sigma=1` in the corrected smoothing sweep
-    (`results/smoothing_sweep_results.json`) -- reused directly rather than re-running
-    `epsilon_stability_check` here, matching this project's established "reuse an already-selected
-    epsilon, don't reselect" convention (e.g. `run_stronger_cnn_raw_mnist_experiment`).
-
-    `n_points` defaults to 300, matching this project's established memory-safety convention for
-    `local_patch_cross_terms`-family embeddings (see `run_smoothing_sweep`'s own docstring) --
-    unlike that sweep's expensive `epsilon_stability_check` calls, this check only ever does plain
-    forward passes through each embedding (no `jacrev`/gradient computation at all), so it's cheap
-    regardless of point count, but 300 is kept for direct comparability with every other
-    `local_patch_cross_terms`-family result in this project.
-
-    Returns a dict: `results` (`{metric_name: {within_mean, between_mean, ratio, n_within,
-    n_between}}`), plus `x_subset`/`y_subset`/`train`/`test` for reuse by a caller.
-    """
+    """Runs class_separation_ratio for four distance metrics on the same stratified subsample: raw
+    pixel Euclidean, unsmoothed cross-terms, sigma=1 smoothed cross-terms, and the same embedding
+    under Mahalanobis distance. Returns a dict of per-metric results plus the subset and data used."""
     if train is None:
         train = load_mnist(train=True)
     if test is None:
@@ -709,29 +552,9 @@ def run_radius_multiplier_sweep(
     max_cond=1e4, max_cv=0.05, n_ratio_points=300, k_neighbors=5, n_purity_points=1000,
     seed=SEED, verbose=True,
 ):
-    """`run_smoothing_sweep`'s sibling: instead of sweeping smoothing strength `sigma`, fixes
-    `sigma` at the already-established best value (`1.0`, `run_smoothing_sweep`'s sweet spot -- see
-    `distance_measures.md`'s smoothing sub-experiment) and sweeps `smoothing.py`'s `radius_multiplier` --
-    `RADIUS_MULTIPLIER=3` was used throughout that entire sweep without itself ever having been
-    swept, i.e. picked once and assumed, not checked. Same per-value methodology as
-    `run_smoothing_sweep`: `epsilon_stability_check` on the full standard epsilon grid, `purity` on
-    a fixed validation subset, an always-computed Euclidean ratio-distribution analysis, and a
-    Mahalanobis one gated on whether epsilon stability actually passed at that `radius_multiplier`.
-
-    **Saves incrementally, after every `radius_multiplier` completes**, not just once at the end --
-    unlike `run_smoothing_sweep`'s per-sigma gallery PNGs (which gave incidental progress
-    visibility), this sweep has no equivalent per-value artifact, so the summary JSON/arrays are
-    the only way to observe progress on a long-running background execution; writing them
-    incrementally makes that possible.
-
-    Returns a dict: `multiplier_results` (`{radius_multiplier: {min_cv, stability_pass,
-    selected_epsilon, knn_label_purity, euclidean_ratio_summary, mahalanobis_ratio_summary}}`),
-    `stability_figure`, `ratio_figure`, plus `lr_model`/`train`/`test` for reuse. Also saves a
-    summary JSON, the merged ratio-distribution arrays, and both summary plots to `results/`.
-
-    Deliberately **not** called from `main()` (mirrors `run_smoothing_sweep`'s own opt-in
-    convention) -- run it directly, e.g. from `notebook_radius_multiplier_sweep.ipynb`.
-    """
+    """run_smoothing_sweep's sibling: fixes the blur strength sigma at its established best value
+    and sweeps the blur kernel's radius_multiplier instead. Opt-in — not called from main(). 
+    Returns the same shape of result as run_smoothing_sweep, keyed by radius_multiplier."""
     torch.manual_seed(seed)
     if train is None:
         train = load_mnist(train=True)
@@ -806,8 +629,6 @@ def run_radius_multiplier_sweep(
             "mahalanobis_ratio_summary": mahalanobis_ratio_result["summary"] if mahalanobis_ratio_result else None,
         }
 
-        # incremental save after every radius_multiplier -- the only progress visibility available
-        # for a long-running background execution of this sweep (see docstring)
         with open(RESULTS_DIR / "radius_multiplier_sweep_results.json", "w") as f:
             json.dump({str(k): v for k, v in multiplier_results.items()}, f, indent=2)
         np.savez(RESULTS_DIR / "radius_multiplier_sweep_arrays.npz", **ratio_arrays)
@@ -842,48 +663,11 @@ def run_truncated_mahalanobis_sweep(
     stability_n_points=100, max_cond=1e4, max_cv=0.05, n_ratio_points=300, k_neighbors=5,
     n_purity_points=1000, seed=SEED, verbose=True,
 ):
-    """Tests `distance.py::truncated_precision` (discard low-variance directions entirely) against
-    three feature spaces that all failed `svd_ridge_precision`'s ridge regularization (regularize
-    instead of discard) at every epsilon tried: raw pixels (well-conditioned under ridge, included
-    as a sanity-check baseline this new method should also handle cleanly), `local_patch_cross_terms`
-    (categorical epsilon-selection failure, cv 0.91-1.45), and `smoothed_cross_terms_embedding` at
-    `sigma=1` (the smoothing sweep's best purity/legibility point, cv 0.075 -- close to, but never
-    actually under, the 0.05 bound).
+    """Tests truncated-eigenvalue Mahalanobis distance (discarding low-variance directions entirely)
+    against feature spaces that failed under ridge regularisation, sweeping the number of retained
+    dimensions k. Opt-in — not called from main(). Returns results keyed by feature space and k, plus
+    the stability and ratio summary figures."""
 
-    For each feature space, sweeps `k` in `k_values`, checking stability at every `k`
-    *individually* (unlike `run_smoothing_sweep`'s single-selected-epsilon-per-sigma design) --
-    the interesting question here is exactly which `k` values pass, not just whether any does, so
-    each `k` that passes both the condition-number and cv bounds gets its own full
-    ratio-distribution analysis; each that doesn't is skipped with `ratio_summary=None`.
-
-    Two efficiency choices, both driven by every tested `k` being a nested truncation of the same
-    full-rank SVD for a given feature space:
-    - The stability check itself (`k_stability_check`) shares one SVD per resampled subsample
-      across every `k`, rather than refitting per `k` (see its own docstring).
-    - The *final* eigenbasis used for both `knn_label_purity` and each passing `k`'s
-      ratio-distribution precision matrix is fit once per feature space, on the full training set
-      (matching every other final precision matrix in this project), and sliced per `k` -- not
-      refit per `k`.
-
-    `knn_label_purity` is computed on *whitened* truncated-Mahalanobis coordinates
-    (`embedded @ V_k / sqrt(eigenvalues_k)`, whose Euclidean distance exactly equals the truncated
-    Mahalanobis distance for that `k`) rather than the raw embedded space, so it reflects the
-    actual per-`k` metric being validated, not a `k`-independent proxy.
-
-    `n_ratio_points` defaults to 300, not 1000, matching `run_smoothing_sweep`'s reduced point
-    count for the same memory reason (`local_patch_cross_terms`'s 3920-dimensional output exhausted
-    this machine's memory/swap at 1000 points in an earlier one-off comparison) -- applied uniformly
-    across all three feature spaces here (including raw pixels) so results stay directly comparable
-    within one table, not just within each feature space's own row.
-
-    Returns a dict: `feature_space_results` (`{name: {k: {cond, cv, stability_pass,
-    knn_label_purity, ratio_summary}}}`), `stability_figure`, `ratio_figure`, plus
-    `lr_model`/`train`/`test` for reuse by a caller. Also saves a summary JSON, the merged
-    ratio-distribution arrays, and both summary plots to `results/`.
-
-    Deliberately **not** called from `main()` (mirrors `run_smoothing_sweep`'s own opt-in
-    convention) -- run it directly, e.g. from `notebook_truncated_mahalanobis.ipynb`.
-    """
     torch.manual_seed(seed)
     if train is None:
         train = load_mnist(train=True)
@@ -982,35 +766,10 @@ def run_stronger_cnn_raw_mnist_experiment(
     mahalanobis_epsilon=0.01,
     seed=SEED, verbose=True,
 ):
-    """CNN-only counterpart to run_mnist_experiment(), for the higher-capacity
-    `StrongCNN` (models.py) on raw (uncleaned, standard train/test split)
-    MNIST -- a stronger baseline captured ahead of a later data-cleaning
-    experiment. Logistic regression and MLP, and the original `SmallCNN`
-    baseline, are untouched by this function and continue to live in
-    results/ exactly as before; this saves to its own
-    results/stronger_cnn_raw_mnist/ subfolder instead.
-
-    Trains StrongCNN with STRONG_CNN_CONFIG's exact recipe (batch norm,
-    dropout, light rotation/translation augmentation via
-    `augmentation.random_affine_augment`, a cosine-annealed learning rate,
-    and more epochs than SmallCNN's original 8) via train_classifier's
-    augment_fn/lr_scheduler_fn parameters, then runs the same three
-    Lipschitz sub-methods (pairwise, local-perturbation, gradient-norm) and
-    the same ratio-distribution/near-neighbor analysis
-    run_mnist_experiment() runs for the CNN, under both Euclidean and
-    Mahalanobis distance, on the same-shaped query/ratio-distribution
-    subsets (1000 points each, matching the existing safe-tested config --
-    see README's "Pairwise sampling keeps N modest" design decision).
-
-    Mahalanobis epsilon is *not* reselected here: raw MNIST's pixel
-    covariance is exactly the same data run_mnist_experiment() already
-    selected epsilon=0.01 for (see README's Epsilon selection section) --
-    reselecting via epsilon_stability_check (which trains a fresh reference
-    model and does several resampled SVDs) would just reproduce the same
-    answer at real extra cost. Pass a different `mahalanobis_epsilon`
-    explicitly if that assumption is ever revisited (e.g. once the
-    data-cleaning step changes the pixel covariance itself).
-    """
+    """CNN-only counterpart to run_mnist_experiment, for the higher-capacity StrongCNN on standard
+    MNIST — a stronger baseline ahead of a later data-cleaning experiment. Does not retrain logistic 
+    regression, the MLP, or the original SmallCNN. Returns the same shape of result as
+    run_mnist_experiment, restricted to StrongCNN."""
     torch.manual_seed(seed)
     train = load_mnist(train=True)
     test = load_mnist(train=False)
@@ -1064,16 +823,10 @@ def run_stronger_cnn_raw_mnist_experiment(
     out_dir = RESULTS_DIR / "stronger_cnn_raw_mnist"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Persist trained weights alongside the results -- without this, later
-    # inspection of specific flagged pairs (e.g. re-running the model to get
-    # per-image softmax confidences) would require retraining from scratch.
     torch.save(cnn_model_raw.state_dict(), out_dir / "strong_cnn_state_dict.pt")
 
     def _labeled_pairs(top_pairs):
-        # top_pairs entries: (img1, img2, true1, pred1, true2, pred2, ratio, dist, margin_diff)
-        # -- images are dropped here (already saved as PNGs below); only the
-        # labels/ratio/components (what's needed to answer "which digit
-        # pairs get flagged") are kept in the JSON summary.
+        """Packages a set of top-ratio pairs with their labels and predictions for saving/plotting."""
         return [
             {"true1": t1, "pred1": p1, "true2": t2, "pred2": p2,
              "ratio": ratio, "dist": dist, "margin_diff": margin_diff}
@@ -1145,13 +898,12 @@ def run_mnist_experiment(
     """Full pipeline:
     1. Train all three models (logistic regression, small MLP, small CNN) on MNIST.
     2. Run all three Lipschitz sub-methods (pairwise, local-perturbation, gradient-norm) on all three models under Euclidean distance.
-    2b. Ratio-distribution analysis under Euclidean distance (all pairs vs. nearest neighbors).
-    3. Pixel covariance + epsilon sweep/selection.
-    4. Run all three Lipschitz sub-methods on all three models under Mahalanobis distance.
-    4b. Ratio-distribution analysis under Mahalanobis distance (all pairs vs. nearest neighbors).
-    5. Save results to results/.
+    3. Ratio-distribution analysis under Euclidean distance (all pairs vs. nearest neighbors).
+    4. Pixel covariance + epsilon sweep/selection.
+    5. Run all three Lipschitz sub-methods on all three models under Mahalanobis distance.
+    6. Ratio-distribution analysis under Mahalanobis distance (all pairs vs. nearest neighbors).
+    7. Save results to results/.
     """
-
     torch.manual_seed(seed)
     train, test, train_flat, test_flat, train_img, test_img = _build_models_and_data(seed)
 
@@ -1163,11 +915,6 @@ def run_mnist_experiment(
     mlp_model, mlp_train_acc, mlp_test_acc = train_classifier(
         SmallMLP(hidden_sizes=mlp_hidden_sizes), train_flat, test_flat, epochs=epochs_mlp, lr=1e-3, verbose=verbose)
     if epochs_cnn == 8 and seed == SEED:
-        # The canonical configuration -- shared checkpoint (see models.py::train_or_load_small_cnn),
-        # not an independently-retrained copy, so every experiment that wants "the" SmallCNN gets
-        # literally the same trained weights. A non-default epochs_cnn/seed (e.g. a sweep) falls
-        # back to a fresh, uncached training run below, since those calls are deliberately varying
-        # the training procedure itself.
         cnn_model_raw, cnn_train_acc, cnn_test_acc = train_or_load_small_cnn(seed=seed, verbose=verbose)
     else:
         cnn_model_raw, cnn_train_acc, cnn_test_acc = train_classifier(
@@ -1205,9 +952,9 @@ def run_mnist_experiment(
             print(f"  {name}: pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
                   f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}")
 
-    # Step 2b: Euclidean ratio-distribution analysis
+    # Step 3: Euclidean ratio-distribution analysis
     if verbose:
-        print("\n=== Step 2b: Euclidean ratio-distribution analysis ===")
+        print("\n=== Step 3: Euclidean ratio-distribution analysis ===")
     ratio_dist_euclidean_results = {}
     for name in MODEL_ORDER:
         model = models[name]
@@ -1227,9 +974,9 @@ def run_mnist_experiment(
         lr_euclidean["pairwise"],
     )]
 
-    # Step 3: epsilon selection (pixel covariance + ridge regularization)
+    # Step 4: epsilon selection (pixel covariance + ridge regularization)
     if verbose:
-        print("\n === Step 3: epsilon selection (pixel covariance + ridge regularization) ===")
+        print("\n === Step 4: epsilon selection (pixel covariance + ridge regularization) ===")
     eigenvalues = covariance_eigenvalues(train.x_flat)
     cond_numbers = sweep_epsilon(train.x_flat, list(epsilon_values))
     stability_results = epsilon_stability_check(
@@ -1242,9 +989,9 @@ def run_mnist_experiment(
     precision = svd_ridge_precision(train.x_flat, selected_epsilon)
     mahalanobis_distance_fn = make_mahalanobis_distance_fn(precision)
 
-    # Step 4: Mahalanobis-distance estimators on all three models
+    # Step 5: Mahalanobis-distance estimators on all three models
     if verbose:
-        print(f"\n=== Step 4: Mahalanobis-distance estimators (epsilon={selected_epsilon:g}) ===")
+        print(f"\n=== Step 5: Mahalanobis-distance estimators (epsilon={selected_epsilon:g}) ===")
     mahalanobis_results = {}
     for name in MODEL_ORDER:
         model = models[name]
@@ -1256,9 +1003,9 @@ def run_mnist_experiment(
             print(f"  {name}: pairwise={r['pairwise']:.4f}  local_max={r['local_max']:.4f}  "
                   f"grad_max={r['grad_max']:.4f}  grad_mean={r['grad_mean']:.4f}")
 
-    # Step 4b: Mahalanobis ratio-distribution analysis (reuses selected epsilon)
+    # Step 6: Mahalanobis ratio-distribution analysis (reuses selected epsilon)
     if verbose:
-        print(f"\n=== Step 4b: Mahalanobis ratio-distribution analysis (epsilon={selected_epsilon:g}, all models) ===")
+        print(f"\n=== Step 6: Mahalanobis ratio-distribution analysis (epsilon={selected_epsilon:g}, all models) ===")
     ratio_dist_mahalanobis_results = {}
     for name in MODEL_ORDER:
         model = models[name]
@@ -1266,7 +1013,7 @@ def run_mnist_experiment(
             model, name, "mahalanobis", test.x_flat, test.y, mahalanobis_distance_fn,
             exclude_idx=query_idx, n_points=n_ratio_points, k_neighbors=k_neighbors, seed=seed, verbose=verbose)
 
-    # Step 5: save results
+    # Step 7: save results
     RESULTS_DIR.mkdir(exist_ok=True)
 
     summary = {
@@ -1330,6 +1077,7 @@ def run_mnist_experiment(
 
 
 def main():
+    """Runs the full MNIST Lipschitz experiment via run_mnist_experiment and saves the results."""
     run_mnist_experiment()
 
 if __name__ == "__main__":

@@ -1,7 +1,5 @@
 """Stream (path) construction from MNIST images, for later signature computation.
-
-Three independent methods for turning a 28x28 image into a path (see
-README.md / README.md for the full design rationale):
+Three independent methods for turning a 28x28 image into a path:
   - Method A (`make_pixel_order` + `patch_sv_stream`): a time-augmented stream
     of the largest singular value of 3x3 patches, visited in a fixed shared
     pixel order.
@@ -11,14 +9,12 @@ README.md / README.md for the full design rationale):
   - Method C (`make_hilbert_curve` + `hilbert_stream`): a single Hilbert
     space-filling curve through the image, sampled the same way and cut
     into contiguous segments.
-
-No signature computation happens in this module - see `signatures.py`.
 """
+
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 torch.set_default_dtype(torch.float64)
 
 
@@ -35,10 +31,9 @@ def time_channel(n: int) -> torch.Tensor:
 
 def make_pixel_order(k: int = 64, seed: int = 0,
                       image_size: int = 28) -> torch.Tensor:
-    """Return (k, 2) int64 tensor of (row, col) locations, sampled uniformly
-    WITHOUT replacement from the interior grid [1, image_size-2]^2, in a fixed
-    order determined by seed. Raises ValueError if k exceeds the number of
-    interior pixels.
+    """Return (k, 2) int64 tensor of (row, col) locations, sampled uniformly without
+    replacement from the interior grid [1, image_size-2]^2, in a fixed order determined
+     by seed. Raises ValueError if k exceeds the number of interior pixels.
     """
     lo, hi = 1, image_size - 2
     n_side = hi - lo + 1
@@ -56,7 +51,6 @@ def make_pixel_order(k: int = 64, seed: int = 0,
 def patch_sv_stream(images: torch.Tensor, pixel_order: torch.Tensor,
                      mode: str = "top1") -> torch.Tensor:
     """Method A stream construction.
-
     images: (N, 28, 28) float32
     pixel_order: (K, 2) int64 from make_pixel_order
     returns: (N, K, 2) float32 for mode="top1", columns [t, sigma1],
@@ -88,19 +82,9 @@ def patch_sv_stream(images: torch.Tensor, pixel_order: torch.Tensor,
 def make_reference_lines(angles_deg: tuple = (0, 90), counts: tuple = (8, 8),
                           points_per_line: int = 32,
                           image_size: int = 28, seed: int = 0) -> torch.Tensor:
-    """Return (sum(counts), points_per_line, 2) float32 tensor of (row, col)
-    continuous sample coordinates for Method B's reference lines.
-
-    `angles_deg[i]` contributes `counts[i]` evenly-spaced parallel lines:
-    angle 0 = horizontal (rows evenly spaced across image height via
-    `linspace(0, image_size - 1, count)`, each line sampled left to right);
-    angle 90 = vertical (columns evenly spaced across image width, each line
-    sampled top to bottom). Every point lies in [0, image_size - 1] by
-    construction - no clipping needed. Only angles 0 and 90 (mod 180) are
-    supported for now; arbitrary angles need clipping logic, deferred to
-    Stage 8. `seed` is reserved for future randomized variants - current
-    construction is deterministic without it.
-    """
+    """Fixed horizontal and/or vertical reference lines through the image domain, evenly spaced.
+    Returns (sum(counts), points_per_line, 2) continuous (row, col) coordinates. Only angles 0 and 90
+    are supported — every point lies in bounds by construction."""
     if len(angles_deg) != len(counts):
         raise ValueError("angles_deg and counts must have the same length")
 
@@ -140,8 +124,7 @@ def line_stream(images: torch.Tensor, lines: torch.Tensor) -> torch.Tensor:
              [t, intensity]. Intensity is read via batched bilinear
              interpolation (`grid_sample`, no Python loop over images);
              t = time_channel(points_per_line), identical for every line and
-             every image. Lines stay separate in this output - see
-             README.md's "no cross-line concatenation" note.
+             every image.
     """
     n, h, w = images.shape
     num_lines, points_per_line, _ = lines.shape
@@ -162,10 +145,6 @@ def line_stream(images: torch.Tensor, lines: torch.Tensor) -> torch.Tensor:
     return torch.stack([t, intensity], dim=-1).to(torch.get_default_dtype())
 
 
-# ---------------------------------------------------------------------------
-# Method C: Hilbert curve
-# ---------------------------------------------------------------------------
-
 HILBERT_ORDER = 5
 HILBERT_SIDE = 2 ** HILBERT_ORDER  # 32
 IMAGE_SIZE = 28
@@ -175,18 +154,8 @@ POINTS_PER_SEGMENT = NUM_SAMPLE_POINTS // NUM_SEGMENTS  # 32
 
 
 def _resample_evenly_by_arc_length(coords: np.ndarray, num_points: int) -> np.ndarray:
-    """Given an (M, 2) polyline (consecutive vertices), return (num_points, 2)
-    points evenly spaced along its arc length, from the first vertex to the
-    last (both endpoints included), via cumulative-length parameterization
-    and linear interpolation. Note this is genuinely arc-length-based, not
-    equivalent to simple index subsampling of `coords` in general - even
-    though every raw Hilbert-curve step below has the same length, the
-    curve still bends between steps, so a resampled point can land at a
-    corner or partway along a straight run depending on where its target
-    arc-length falls; only the *target* arc-length values are evenly
-    spaced by construction, not necessarily the Euclidean spacing between
-    consecutive resampled points when the path curves between them.
-    """
+    """Resamples a polyline to num_points points evenly spaced along its arc length, via cumulative-
+    length parameterisation and linear interpolation."""
     deltas = np.diff(coords, axis=0)
     seg_lengths = np.sqrt((deltas ** 2).sum(axis=1))
     cum_length = np.concatenate([[0.0], np.cumsum(seg_lengths)])
@@ -199,12 +168,8 @@ def _resample_evenly_by_arc_length(coords: np.ndarray, num_points: int) -> np.nd
 
 
 def _generate_hilbert_curve(order: int) -> np.ndarray:
-    """(4**order, 2) int64 array of (x, y) grid coordinates, 0 <= x, y <
-    2**order, visited in standard Hilbert-curve order (Wikipedia's
-    index-to-xy algorithm). Verified directly (see tests) to visit every
-    cell exactly once, stay in bounds, and take only unit axis-aligned
-    steps between consecutive points.
-    """
+    """Grid coordinates of an order-N Hilbert curve, visiting every cell exactly once in standard Hilbert order.
+    Returns a (4**order, 2) int64 array of (x, y) grid coordinates, 0 <= x, y < 2**order)"""
     n_cells = 4 ** order
     side = 2 ** order
     xy = np.zeros((n_cells, 2), dtype=np.int64)
@@ -230,22 +195,9 @@ def _generate_hilbert_curve(order: int) -> np.ndarray:
 
 def make_hilbert_curve(order: int = HILBERT_ORDER, image_size: int = IMAGE_SIZE,
                         num_points: int = NUM_SAMPLE_POINTS) -> torch.Tensor:
-    """(num_points, 2) tensor of (row, col) continuous coordinates, evenly
-    spaced along the arc length of an order-`order` Hilbert curve, scaled
-    by `image_size / 2**order` into the image domain. Fixed, deterministic
-    - no seed needed (no randomness anywhere in this construction, unlike
-    Method B's reference lines which reserve a seed parameter for a
-    variant that was never used).
-
-    Every point lies in `[0, (2**order - 1) * image_size/2**order]` by
-    construction - for the defaults (order=5, image_size=28) that's
-    `[0, 27.125]`, very slightly past the last valid pixel index (27), not
-    strictly within it. `hilbert_stream`'s `grid_sample` call uses
-    `padding_mode="border"`, so this clamps to the border pixel rather than
-    erroring or extrapolating - a deliberate, checked choice, not an
-    oversight (see the shape/bounds test, which checks the true bound
-    directly rather than assuming a tidier one).
-    """
+    """A Hilbert curve through the image domain, resampled to num_points points evenly spaced by arc
+    length. Fixed and deterministic — no randomness in the construction.
+    Returns (num_points, 2) float64 tensor of (row, col) coordinates in continuous pixel-index space."""
     side = 2 ** order
     xy = _generate_hilbert_curve(order)  # (4**order, 2) int, grid coords
     scale = image_size / side
@@ -256,18 +208,13 @@ def make_hilbert_curve(order: int = HILBERT_ORDER, image_size: int = IMAGE_SIZE,
 
 
 def hilbert_stream(images: torch.Tensor, curve_points: torch.Tensor) -> torch.Tensor:
-    """Method C stream construction: samples image intensity along the
-    fixed Hilbert curve via batched bilinear interpolation (same
-    `grid_sample` technique/conventions as `line_stream`), then cuts the
-    point sequence into `NUM_SEGMENTS` contiguous segments.
-
+    """Method C stream construction: samples image intensity along the fixed Hilbert curve via bilinear
+    interpolation, then cuts the sequence into NUM_SEGMENTS contiguous segments
     images: (N, 28, 28)
     curve_points: (num_points, 2) [row, col], from make_hilbert_curve.
     returns: (N, num_segments, points_per_segment, 2), columns
-             [t, intensity] - t via time_channel per segment (same
-             convention as Method B's per-line streams). Segments stay
-             separate in this output - never concatenated (no
-             cross-segment concatenation, same rule as Method B's lines).
+             [t, intensity] - t via time_channel per segment. 
+             segments kept separate
     """
     n, h, w = images.shape
     num_points = curve_points.shape[0]
